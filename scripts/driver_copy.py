@@ -184,6 +184,14 @@ def render_group(d, cfg=None):
         lines.append(d.get("no_change_wording")
                      or dm_cfg(cfg).get("no_change_wording")
                      or "本次没有新的报销，之前记过的都算数。")
+    # 2026-11-14 23:53 用户新口径：跑完任务要在群内 @报销人并贴出确认任务，
+    # 报销人可点开查看（follower），负责人可编辑（assignee）。
+    # 有 open_id 用飞书原生 <at> 提醒；缺失时退化为纯文本 @姓名，绝不因此不发任务链接。
+    for t in (d.get("tasks") or []):
+        name = t.get("driver") or ""
+        open_id = t.get("open_id") or ""
+        at = ('<at user_id="%s">%s</at>' % (open_id, name)) if open_id else ("@" + name)
+        lines.append("%s 报销确认任务（可查看，负责人可编辑）：%s" % (at, t.get("url") or ""))
     return _footer(d, cfg, lines, d.get("issues"))
 
 

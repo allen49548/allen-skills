@@ -62,28 +62,22 @@ def cmd_create(args, cfg):
     due_days = args.due_days if args.due_days is not None else gt.get("due_days", 3)
     due = (date.today() + timedelta(days=due_days)).isoformat()
     amount = ("¥%.2f" % args.amount_total) if args.amount_total is not None else "金额待定"
-    title = args.title or "报销确认：%s 本批次 %s（%d 笔）- 真实报销后请点击完成" % (
-        args.driver, amount, args.entry_count or 0)
+    title = args.title or "报销确认｜%s %d 笔 %s｜截止 %s" % (
+        args.driver, args.entry_count or 0, amount, due)
     assignee_name = gt.get("assignee_name") or "负责人"
-    desc_lines = []
-    if args.detail_file and os.path.isfile(args.detail_file):
-        with open(args.detail_file, "r", encoding="utf-8") as f:
-            desc_lines.append(f.read().strip())
-    # 时间窗口与截止点：让报销人与负责人都看得懂，避免重复打款
-    if args.window_start and args.window_end:
-        desc_lines.append("统计窗口（截止）：%s ~ %s（共 %d 天）" % (
-            args.window_start, args.window_end, args.window_days or 14))
-    desc_lines.append("报销确认截止：%s（负责人 %s 真实打款后点完成；逾期系统仍记为待报销，请勿重复打款）" % (due, assignee_name))
-    # 混合群模式：主群名从 config 动态取，绝不拼出不存在的「<司机>报销」群名
-    primary_id = (cfg.get("chat_discovery", {}).get("primary_chat_id")
-                  or next(iter(cfg.get("chat_whitelist", {})), ""))
-    primary_name = (cfg.get("chat_whitelist", {}).get(primary_id, {}).get("name")
-                    or "报销群")
-    desc_lines.append("来源：飞书「%s」群（%s）付款凭证截图；司机归属按消息发送者经名册解析为 %s。"
-                      % (primary_name, primary_id, args.driver))
-    desc_lines.append("权限：负责人可编辑（改金额/截止/标记完成）；报销人仅查看与评论，不能修改或点完成。")
-    desc_lines.append("若识别有误，请群里回复说明，不要点完成。")
-    description = "\n".join(desc_lines)[:8000]
+    # 2026-11-14 23:53 用户新口径：「任务内容也要精简」。
+    # 逐笔明细统一放报表「报销明细」sheet 与运行清单，任务里不再重复铺开。
+    # --detail-file 保留兼容但不再注入描述（避免任务又被撑成长文）。
+    window = "%s ~ %s" % ((args.window_start or "")[:16], (args.window_end or "")[:16]) \
+        if (args.window_start and args.window_end) else "-"
+    desc_lines = [
+        "%s 本批次 %d 笔 %s｜统计窗口（截止）%s" % (
+            args.driver, args.entry_count or 0, amount, window),
+        "报销确认截止：%s（负责人 %s 打款后点完成；请勿重复打款）" % (due, assignee_name),
+        "逐笔明细：报表「报销明细」sheet / 运行清单。",
+        "权限：负责人可编辑；报销人仅查看与评论，不能点完成。",
+    ]
+    description = "\n".join(desc_lines)[:1000]
 
     cmd = [
         "lark-cli", "task", "+create", "--as", "user",
@@ -166,8 +160,56 @@ def _task_completed(task_obj):
     return False
 
 
+def _notify_completion(cfg, driver, count, amount, task_id, dry_run=False):
+    """真实报销后点完成任务 → 群内 @报销人（2026-11-14 23:53 用户新口径）。
+
+    用户原话：「真实报销后点击完成任务（任务内容也要精简），要在群内@报销人。」
+    只发一条极简确认，不带订单号/路径/链接；同一 task_id 幂等，只 @ 一次。
+    """
+    gt = cfg.get("group_task", {})
+    if not gt.get("notify_on_complete", True):
+        return {"ok": False, "skipped": True, "reason": "notify_on_complete=false"}
+    chat_id = (cfg.get("chat_discovery", {}).get("primary_chat_id")
+               or next((k for k, v in cfg.get("chat_whitelist", {}).items()
+                        if v.get("notify")), None))
+    if not chat_id:
+        return {"ok": False, "error": "找不到主群 chat_id"}
+    store_path = os.path.join(cfg["state_dir"], "task_completion_notified.json")
+    try:
+        with open(store_path, "r", encoding="utf-8") as f:
+            store = json.load(f)
+    except Exception:
+        store = []
+    if task_id in store:
+        return {"ok": True, "skipped": True, "reason": "该任务已通知过（幂等）"}
+    open_id = (cfg.get("driver_open_ids", {}).get(driver)
+               or (cfg.get("driver_roster", {}).get("members") or {}).get(driver))
+    at = ('<at user_id="%s">%s</at>' % (open_id, driver)) if open_id else ("@" + driver)
+    text = "%s 你的报销 %d 笔 ¥%.2f 已打款，确认任务已完成，不用再重复发凭证。" % (
+        at, count, amount)
+    key = ("reimb-done-%s-%s" % (str(task_id)[:20], driver))[:50]
+    cmd = ["lark-cli", "im", "+messages-send", "--as", "bot",
+           "--chat-id", chat_id, "--text", "-", "--idempotency-key", key, "--format", "json"]
+    if dry_run:
+        return {"ok": True, "dry_run": True, "argv": cmd, "text": text}
+    try:
+        p = subprocess.run(cmd, input=text, text=True, capture_output=True, timeout=60)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    try:
+        ok = json.loads(p.stdout.strip().split("\n", 1)[-1]).get("ok") is True
+    except Exception:
+        ok = p.returncode == 0 and '"ok": true' in p.stdout
+    if ok:
+        store.append(task_id)
+        with open(store_path, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
+    return {"ok": ok, "chat_id": chat_id, "at_native": bool(open_id),
+            "stdout": p.stdout.strip()[-300:], "stderr": p.stderr.strip()[-200:]}
+
+
 def cmd_check(args, cfg):
-    """轮询台账中 task_status='pending' 的任务；完成的批次标记已报销。"""
+    """轮询台账中 task_status='pending' 的任务；完成的批次标记已报销并群内 @报销人。"""
     code, pending, _ = run_cli([sys.executable, LEDGER, "unreimbursed"])
     if not pending or not pending.get("ok"):
         return {"ok": False, "error": "读取台账失败", "raw": pending}
@@ -188,10 +230,15 @@ def cmd_check(args, cfg):
         task_obj = data.get("data", {}).get("task") or data.get("task") or data.get("data", {})
         if _task_completed(task_obj):
             run_cli([sys.executable, LEDGER, "mark-reimbursed", "--task-id", tid])
-            confirmed.append({
+            item = {
                 "task_id": tid, "driver": entries[0].get("driver"),
                 "count": len(entries), "amount": round(sum(x.get("amount") or 0 for x in entries), 2),
-            })
+            }
+            if not getattr(args, "no_notify", False):
+                item["completion_notice"] = _notify_completion(
+                    cfg, item["driver"], item["count"], item["amount"], tid,
+                    dry_run=bool(getattr(args, "dry_run", False)))
+            confirmed.append(item)
         else:
             still.append({"task_id": tid, "driver": entries[0].get("driver"), "count": len(entries)})
     # 无任务绑定的条目（早期数据或建任务失败）单独列出
@@ -239,7 +286,9 @@ def main():
     c.add_argument("--window-end", help="统计窗口截止时间=本次运行时间（ISO），写入任务描述")
     c.add_argument("--window-days", type=int, help="统计窗口天数，用于描述")
     c.add_argument("--dry-run", action="store_true")
-    sub.add_parser("check")
+    ck = sub.add_parser("check")
+    ck.add_argument("--no-notify", action="store_true", help="轮询完成状态但不在群内 @报销人")
+    ck.add_argument("--dry-run", action="store_true", help="只生成 @ 文案，不真发")
     sub.add_parser("pending")
     args = p.parse_args()
     cfg = load_config()
