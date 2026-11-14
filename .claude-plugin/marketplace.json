@@ -1,0 +1,15 @@
+{
+  "name": "reimbursement-skill",
+  "description": "冷链物流司机报销自动归集技能：飞书群付款凭证截图 → 按司机/月份统计 → 幂等去重 → 两层通报。",
+  "owner": { "name": "allen" },
+  "plugins": [
+    {
+      "name": "reimbursement-skill",
+      "description": "自动报销系统：从飞书群读取付款凭证截图，按司机分类统计报销，幂等去重，两层通报。",
+      "version": "1.0.0",
+      "source": "./",
+      "strict": false,
+      "skills": ["./"]
+    }
+  ]
+}

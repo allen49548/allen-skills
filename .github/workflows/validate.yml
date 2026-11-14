@@ -1,0 +1,34 @@
+name: Validate skill
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile scripts
+        run: python -m py_compile scripts/*.py
+      - name: Check SKILL.md frontmatter
+        run: |
+          python - <<'PY'
+          import re, sys
+          text = open('SKILL.md', encoding='utf-8').read()
+          m = re.match(r'^---\n(.*?)\n---\n', text, re.S)
+          if not m:
+              print('SKILL.md 缺少 YAML frontmatter')
+              sys.exit(1)
+          fm = m.group(1)
+          assert 'name:' in fm, 'frontmatter 缺少 name'
+          assert 'description:' in fm, 'frontmatter 缺少 description'
+          print('SKILL.md frontmatter OK')
+          PY

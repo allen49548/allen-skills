@@ -34,3 +34,10 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+
+# 本地 Agent 配置（不公开）
+.claude/settings.local.json
+CLAUDE.md
+
+# 云同步冲突副本
+.sync-conflict-*
