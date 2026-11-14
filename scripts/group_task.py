@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""报销确认群任务：真实报销后负责人点击完成任务，形成「已报销/未报销」闭环。
+
+用法：
+  group_task.py create --driver 周小毛 --run-id 20261112_0900 \
+      [--title "..."] [--amount-total 123.45] [--entry-count 3] \
+      [--detail-file /path/to/md] [--entry-ids 1,2,3] [--due-days 3] [--dry-run]
+  group_task.py check            # 查询台账中未完成任务状态，已完成则标记已报销
+  group_task.py pending          # 列出未真实报销的批次（按任务聚合）
+
+设计：
+- 一个司机一轮同步的新入账条目 = 一个批次 = 一个飞书任务（负责人 = config.group_task.assignee_open_id）。
+- 任务标题带司机、批次、金额与笔数；描述含逐笔明细。
+- 任务完成 → 本脚本 check 命令把该批次台账条目标记 reimbursed=1。
+- --idempotency-key = "reimb:{run_id}:{driver}"，同一批次重复执行不会建出第二个任务。
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+from datetime import date, timedelta
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(HERE, "..", "config.json")
+LEDGER = os.path.join(HERE, "ledger.py")
+
+
+def load_config():
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def run_cli(cmd):
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    out = p.stdout.strip()
+    try:
+        return p.returncode, json.loads(out) if out else None, p.stderr.strip()
+    except json.JSONDecodeError:
+        return p.returncode, out, p.stderr.strip()
+
+
+def _add_driver_viewer(task_id, driver_open_id, as_identity="user"):
+    """把报销人作为 follower 加入任务：可查看/评论，但不可编辑核心字段（非负责人）。"""
+    if not task_id or not driver_open_id:
+        return None
+    cmd = [
+        "lark-cli", "task", "members", "add", "--as", as_identity,
+        "--task-guid", str(task_id),
+        "--data", json.dumps({"members": [{"id": driver_open_id, "role": "follower"}]}),
+        "--format", "json",
+    ]
+    code, data, err = run_cli(cmd)
+    return {"ok": code == 0, "code": code, "data": data, "error": err}
+
+
+def cmd_create(args, cfg):
+    gt = cfg.get("group_task", {})
+    assignee = args.assignee or gt.get("assignee_open_id") or cfg.get("owner_open_id")
+    if not assignee:
+        return {"ok": False, "error": "缺少负责人 open_id（config.group_task.assignee_open_id）"}
+    due_days = args.due_days if args.due_days is not None else gt.get("due_days", 3)
+    due = (date.today() + timedelta(days=due_days)).isoformat()
+    amount = ("¥%.2f" % args.amount_total) if args.amount_total is not None else "金额待定"
+    title = args.title or "报销确认：%s 本批次 %s（%d 笔）- 真实报销后请点击完成" % (
+        args.driver, amount, args.entry_count or 0)
+    assignee_name = gt.get("assignee_name") or "负责人"
+    desc_lines = []
+    if args.detail_file and os.path.isfile(args.detail_file):
+        with open(args.detail_file, "r", encoding="utf-8") as f:
+            desc_lines.append(f.read().strip())
+    # 时间窗口与截止点：让报销人与负责人都看得懂，避免重复打款
+    if args.window_start and args.window_end:
+        desc_lines.append("统计窗口（截止）：%s ~ %s（共 %d 天）" % (
+            args.window_start, args.window_end, args.window_days or 14))
+    desc_lines.append("报销确认截止：%s（负责人 %s 真实打款后点完成；逾期系统仍记为待报销，请勿重复打款）" % (due, assignee_name))
+    # 混合群模式：主群名从 config 动态取，绝不拼出不存在的「<司机>报销」群名
+    primary_id = (cfg.get("chat_discovery", {}).get("primary_chat_id")
+                  or next(iter(cfg.get("chat_whitelist", {})), ""))
+    primary_name = (cfg.get("chat_whitelist", {}).get(primary_id, {}).get("name")
+                    or "报销群")
+    desc_lines.append("来源：飞书「%s」群（%s）付款凭证截图；司机归属按消息发送者经名册解析为 %s。"
+                      % (primary_name, primary_id, args.driver))
+    desc_lines.append("权限：负责人可编辑（改金额/截止/标记完成）；报销人仅查看与评论，不能修改或点完成。")
+    desc_lines.append("若识别有误，请群里回复说明，不要点完成。")
+    description = "\n".join(desc_lines)[:8000]
+
+    cmd = [
+        "lark-cli", "task", "+create", "--as", "user",
+        "--summary", title,
+        "--description", description,
+        "--due", due,
+        "--assignee", assignee,
+        "--idempotency-key", "reimb:%s:%s" % (args.run_id, args.driver),
+        "--format", "json",
+    ]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    code, data, err = run_cli(cmd)
+    result = {"ok": code == 0 and data is not None, "task": data, "stderr": err}
+    if not result["ok"]:
+        result["error"] = "创建飞书任务失败: %s" % (err or data)
+        return result
+
+    # CLI 返回结构兼容：{"data": {"guid":..., "url":..., "status":...}} 或嵌套 task
+    if isinstance(data, dict):
+        task = data.get("data") if isinstance(data.get("data"), dict) else {}
+        inner = task.get("task") if isinstance(task.get("task"), dict) else None
+        if inner:
+            task = inner
+    else:
+        task = {}
+    task_id = task.get("task_guid") or task.get("guid") or task.get("id") or task.get("task_id")
+    task_url = task.get("url") or task.get("applink_url")
+    if task_id and not task_url:
+        task_url = "https://applink.feishu.cn/client/todo?guid=%s" % task_id
+    result["task_id"] = task_id
+    result["task_url"] = task_url
+
+    if args.entry_ids and task_id and not args.dry_run:
+        code2, data2, _ = run_cli([
+            sys.executable, LEDGER, "set-task",
+            "--ids", args.entry_ids, "--task-id", str(task_id),
+        ] + (["--task-url", task_url] if task_url else []))
+        result["ledger_bind"] = data2
+
+    # 报销人加为查看人（follower：仅查看/评论，不可编辑）：需要司机 open_id
+    # 混合群下按【司机名】解析，不再依赖「一个群 = 一个司机」：
+    # 命令行参数 → config.driver_open_ids → driver_roster.members → 旧白名单结构兜底
+    roster_members = cfg.get("driver_roster", {}).get("members") or {}
+    driver_open_id = (args.driver_open_id
+                      or cfg.get("driver_open_ids", {}).get(args.driver)
+                      or roster_members.get(args.driver)
+                      or next((w.get("driver_open_id") for w in cfg.get("chat_whitelist", {}).values()
+                               if w.get("driver") == args.driver), None))
+    if driver_open_id and task_id and not args.dry_run:
+        result["driver_viewer"] = _add_driver_viewer(task_id, driver_open_id)
+    elif not driver_open_id:
+        result["driver_viewer"] = {"ok": False, "skipped": True,
+                                   "reason": "缺少司机 open_id（config.driver_open_ids[%s] / driver_roster.members 均为空；司机需先进入「物流部」群并跑 driver_roster.py sync，或直接提供 open_id）" % args.driver}
+    return result
+
+
+def _task_completed(task_obj):
+    """宽容解析任务是否已完成（不同 API 版本字段不同）。
+    注意：未完成任务的 completed_at 可能是 "0"（字符串零），必须排除。"""
+    if not isinstance(task_obj, dict):
+        return False
+    for k in ("completed_at", "complete_time", "completed_time"):
+        v = task_obj.get(k)
+        if v is None or v == "" or v == "0" or v == 0:
+            continue
+        try:
+            if isinstance(v, (int, float)) and v <= 0:
+                continue
+            if isinstance(v, str) and float(v) <= 0:
+                continue
+        except (ValueError, TypeError):
+            pass
+        return True
+    st = task_obj.get("status")
+    if isinstance(st, str):
+        return st.lower() in ("completed", "done", "complete")
+    if isinstance(st, dict):
+        return str(st.get("status", "")).lower() in ("completed", "done")
+    return False
+
+
+def cmd_check(args, cfg):
+    """轮询台账中 task_status='pending' 的任务；完成的批次标记已报销。"""
+    code, pending, _ = run_cli([sys.executable, LEDGER, "unreimbursed"])
+    if not pending or not pending.get("ok"):
+        return {"ok": False, "error": "读取台账失败", "raw": pending}
+    tasks = {}
+    for e in pending.get("entries", []):
+        tid = e.get("task_id")
+        if tid:
+            tasks.setdefault(tid, []).append(e)
+    confirmed, still, errors = [], [], []
+    for tid, entries in tasks.items():
+        code, data, err = run_cli([
+            "lark-cli", "task", "tasks", "get", "--as", "user",
+            "--task-guid", tid, "--format", "json",
+        ])
+        if code != 0 or not isinstance(data, dict):
+            errors.append({"task_id": tid, "error": err or "查询失败"})
+            continue
+        task_obj = data.get("data", {}).get("task") or data.get("task") or data.get("data", {})
+        if _task_completed(task_obj):
+            run_cli([sys.executable, LEDGER, "mark-reimbursed", "--task-id", tid])
+            confirmed.append({
+                "task_id": tid, "driver": entries[0].get("driver"),
+                "count": len(entries), "amount": round(sum(x.get("amount") or 0 for x in entries), 2),
+            })
+        else:
+            still.append({"task_id": tid, "driver": entries[0].get("driver"), "count": len(entries)})
+    # 无任务绑定的条目（早期数据或建任务失败）单独列出
+    no_task = [e for e in pending.get("entries", []) if not e.get("task_id")]
+    return {
+        "ok": True, "confirmed_this_run": confirmed,
+        "awaiting_completion": still, "no_task_bound": {
+            "count": len(no_task),
+            "amount": round(sum(x.get("amount") or 0 for x in no_task), 2),
+        }, "query_errors": errors,
+    }
+
+
+def cmd_pending(args, cfg):
+    code, pending, _ = run_cli([sys.executable, LEDGER, "unreimbursed"])
+    if not pending or not pending.get("ok"):
+        return {"ok": False, "error": "读取台账失败"}
+    by_task = {}
+    for e in pending.get("entries", []):
+        tid = e.get("task_id") or "(未绑定任务)"
+        by_task.setdefault(tid, {"task_id": tid, "task_url": e.get("task_url"),
+                                 "driver": e.get("driver"), "entries": [], "amount": 0.0})
+        by_task[tid]["entries"].append({"id": e["id"], "date": e.get("receipt_date"),
+                                        "amount": e.get("amount")})
+        by_task[tid]["amount"] = round(by_task[tid]["amount"] + (e.get("amount") or 0), 2)
+    return {"ok": True, "batches": list(by_task.values()),
+            "total_unreimbursed": round(sum(b["amount"] for b in by_task.values()), 2)}
+
+
+def main():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("create")
+    c.add_argument("--driver", required=True)
+    c.add_argument("--run-id", required=True)
+    c.add_argument("--title")
+    c.add_argument("--amount-total", type=float)
+    c.add_argument("--entry-count", type=int)
+    c.add_argument("--detail-file")
+    c.add_argument("--entry-ids", help="逗号分隔的台账 id，绑定任务")
+    c.add_argument("--assignee", help="覆盖负责人 open_id")
+    c.add_argument("--due-days", type=int)
+    c.add_argument("--driver-open-id", help="报销人 open_id，加为任务查看人（仅查看/评论）")
+    c.add_argument("--window-start", help="统计窗口起始时间（ISO），写入任务描述")
+    c.add_argument("--window-end", help="统计窗口截止时间=本次运行时间（ISO），写入任务描述")
+    c.add_argument("--window-days", type=int, help="统计窗口天数，用于描述")
+    c.add_argument("--dry-run", action="store_true")
+    sub.add_parser("check")
+    sub.add_parser("pending")
+    args = p.parse_args()
+    cfg = load_config()
+    out = {"create": cmd_create, "check": cmd_check, "pending": cmd_pending}[args.cmd](args, cfg)
+    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+    sys.exit(0 if out.get("ok") else 1)
+
+
+if __name__ == "__main__":
+    main()

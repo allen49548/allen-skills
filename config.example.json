@@ -1,0 +1,273 @@
+{
+  "version": 6,
+  "owner_open_id": "REPLACE_WITH_OWNER_OPEN_ID",
+  "report_root": "REPLACE_WITH_REPORT_ROOT_ABS_PATH",
+  "report_subdir": "{year}年/司机工资",
+  "report_filename": "{driver}{year}.xlsx",
+  "state_dir": "state",
+  "lookback_days": 14,
+  "chat_whitelist": {
+    "REPLACE_WITH_LOGISTICS_GROUP_CHAT_ID": {
+      "name": "物流部",
+      "mode": "shared",
+      "driver": null,
+      "notify": true,
+      "note": "2026-11-14 起所有司机共用此群；司机归属由消息发送者经 driver_roster 逐条解析，绝不按群固定归属。唯一允许群内通报的会话。"
+    }
+  },
+  "retired_chats": {
+    "REPLACE_WITH_RETIRED_CHAT_ID": {
+      "name": "陈华胜报销",
+      "driver": "陈华胜",
+      "notify": false,
+      "read": false,
+      "retired_at": "2026-11-14",
+      "reason": "用户 2026-11-14 明确废弃，统一迁到「物流部」群；不再拉消息、不再通报。台账历史原样保留，月报按司机分类仍计入。"
+    }
+  },
+  "driver_roster": {
+    "mode": "sender_based",
+    "source": "report_files+chat_members",
+    "report_dir_pattern": "{report_root}/{year}年/司机工资",
+    "report_filename_pattern": "{driver}{year}.xlsx",
+    "members": {
+      "贾燕斌": "REPLACE_WITH_贾燕斌_OPEN_ID"
+    },
+    "extra_drivers": [
+      "陈华胜"
+    ],
+    "owner_open_id_is_not_driver": true,
+    "unknown_sender": "manual_review",
+    "cross_check_text_name": true,
+    "accept_new_driver_by_sender_name": true,
+    "new_driver_action": "record_without_write",
+    "new_driver_note": "用户 2026-11-14 明确『司机是弹性的，只计算发了图片的司机，不纠结全部司机有没有到齐』：司机名册不再是前置门槛。发送者不在名册但飞书返回了真实成员姓名、且不是负责人本人时，直接按该姓名建立 driver（客观发送者身份，不是猜），标记 is_new_driver=true；因无当年报表一律按 record_without_write 只登记台账、绝不新建报表。文字/票面出现其他司机姓名仍做代发冲突校验。",
+    "note": "司机名册 = 报表目录下 {司机}{年份}.xlsx 的文件名前缀 + extra_drivers（无报表但历史上报销过的司机）+ members 已知映射，仅作为归属辅助与报表定位依据，**不要求全员到齐**。每轮可用 lark-cli im +chat-members-list --as user 同步群成员提升匹配精度，但未匹配成员、缺 open_id 都只作信息记录，绝不当作待办、异常或催办理由；没有 open_id 也照样按发送者姓名归属入账。群主本人不算司机。发送者无法解析、或与票面/文字姓名冲突时一律进「待人工确认·未识别司机」，绝不猜归属、绝不默认算给某个人。"
+  },
+  "driver_open_ids": {
+    "贾燕斌": "REPLACE_WITH_贾燕斌_OPEN_ID",
+    "周小毛": "",
+    "陈华胜": "",
+    "劳辉厚": "",
+    "康国强": "",
+    "杨海湘": "",
+    "王博成": "",
+    "蒙祖友": "",
+    "辛荣超": ""
+  },
+  "chat_discovery": {
+    "name_contains": [
+      "物流部",
+      "报销"
+    ],
+    "exclude_name_contains": [
+      "小黑瓶"
+    ],
+    "exclude_chat_ids": [
+      "REPLACE_WITH_EXCLUDE_CHAT_ID_1",
+      "REPLACE_WITH_EXCLUDE_CHAT_ID_2",
+      "REPLACE_WITH_EXCLUDE_CHAT_ID_3",
+      "REPLACE_WITH_EXCLUDE_CHAT_ID_4"
+    ],
+    "primary_chat_id": "REPLACE_WITH_LOGISTICS_GROUP_CHAT_ID",
+    "require_owner_is_self": true,
+    "new_chat_notify": false,
+    "new_chat_report_to": "REPLACE_WITH_NEW_CHAT_REPORT_TO_CHAT_ID"
+  },
+  "fallback_dm_chat_id": "REPLACE_WITH_FALLBACK_DM_CHAT_ID",
+  "owner_dm_chat_id": "REPLACE_WITH_OWNER_DM_CHAT_ID",
+  "group_task": {
+    "enabled": true,
+    "assignee_open_id": "REPLACE_WITH_ASSIGNEE_OPEN_ID",
+    "assignee_name": "廖浩成",
+    "due_days": 3,
+    "batching": "driver_per_run",
+    "note": "每轮同步为每位司机的新入账条目建一个飞书任务（混合群下按 driver 分组，不再按群分组），负责人真实报销后点完成；check 命令轮询完成状态并标记已报销"
+  },
+  "ocr": {
+    "min_confidence": 0.8,
+    "undated_receipt": "manual_review",
+    "accepted_source": "payment_voucher_screenshot",
+    "accept_handwritten_receipt": false,
+    "accept_text_only_claim": false,
+    "on_handwritten_receipt": "notify_resubmit",
+    "on_text_only_claim": "ignore",
+    "resubmit_hint": "手写票与纯文字报销不再入账；请改发付款凭证截图（微信/支付宝账单详情、支付成功页等含金额与支付时间的机打截图）到本群补录，并注明是本人费用。",
+    "note": "只认付款凭证截图（机打、含金额+支付时间/日期、可辨订单号优先）。手写票一律跳过并入通报『请补录』；纯文本报销消息一律忽略，不作为报销记录、不登记台账。"
+  },
+  "dedup": {
+    "phash_hamming_threshold": 6,
+    "business_key_fields": [
+      "driver",
+      "pay_time",
+      "order_no",
+      "amount"
+    ],
+    "never_double_count": true,
+    "resubmit_note": "司机今天发了报销、负责人尚未完成报销、第二天又把同样凭证重发一遍——必须识别为重复提交，绝不重复计算。命中重复时通报必须注明『原登记时间 + 该笔当前是否已报销(待报销/已报销)』，让所有人看得懂为什么没加钱。",
+    "note": "去重以订单号+支付时间为准：相同金额不是重复。order_no 存在时业务键=driver|pay_time|order_no，否则回退 driver|receipt_date|amount|category|image_sha16。driver 现在由发送者解析，不同司机即便金额与日期相同也不判重复。L3 感知哈希命中但订单号不同则不算重复（同版式截图误报）。"
+  },
+  "status_model": {
+    "version": 2,
+    "adopted_at": "2026-11-14",
+    "purpose": "司机一多，必须先统一『报销完成 / 未报销』的口径，避免把重复提交、缺材料、手写票金额误当成还欠的钱。",
+    "states": {
+      "reimbursed": {
+        "label": "已报销",
+        "condition": "台账 reimbursed=1（负责人点完成确认任务后由 group_task.py check 标记）",
+        "counts_as_outstanding": false,
+        "driver_wording": "已打款，不用管"
+      },
+      "pending_payment": {
+        "label": "已登记·待打款",
+        "condition": "台账已登记且 reimbursed=0 AND voided=0（确认任务未完成）",
+        "counts_as_outstanding": true,
+        "driver_wording": "已收齐，等负责人打款"
+      },
+      "needs_action": {
+        "label": "需你补材料",
+        "condition": "低置信度 / 无日期 / 未识别司机 / 手写票 / 纯文本，未登记台账",
+        "counts_as_outstanding": false,
+        "driver_wording": "要补什么材料"
+      },
+      "duplicate": {
+        "label": "重复·未加钱",
+        "condition": "ledger.py check 四层去重命中，含跨时重发",
+        "counts_as_outstanding": false,
+        "driver_wording": "之前记过了，这次没多算"
+      },
+      "voided": {
+        "label": "作废",
+        "condition": "台账 voided=1",
+        "counts_as_outstanding": false,
+        "driver_wording": "不计入"
+      }
+    },
+    "outstanding_definition": "未报销 / 未结金额 = 仅『已登记·待打款』状态累计。其余四种状态的金额一律不进任何未报销、待确认或合计金额；这条同时守住『手写票不把金额列入待确认』『重复提交坚决不加钱』两条铁律。",
+    "balance_source": "scripts/ledger.py balance（按 driver 分组输出已报销 / 未报销的笔数与金额累计）",
+    "note": "四态与『我的未结』只在负责人专业版与台账查询中展示；面向司机的群内通报按 config.driver_message 极简口径只写金额和日期，不出现四态、笔数、未结或环比。"
+  },
+  "driver_message": {
+    "mode": "minimal_amount_date",
+    "adopted_at": "2026-11-14",
+    "version": 1,
+    "rule": "用户 2026-11-14 要求：报销统计完，只告诉司机【本次报销金额】和【日期】；异常尽量简单描述；结尾送一句安全驾驶主题的调侃话。四态、未结、环比、笔数、任务链接、台账路径等一律只保留在负责人专业版。",
+    "applies_to": [
+      "group_overview",
+      "monthly_group"
+    ],
+    "allowed_fields": [
+      "generated_at",
+      "time_boundary_line",
+      "driver",
+      "amount",
+      "dates",
+      "issue_summary",
+      "safety_joke"
+    ],
+    "forbidden_fields": [
+      "订单号尾号",
+      "凭证文件名",
+      "任务链接/guid",
+      "台账/清单/备份路径",
+      "未写报表原因",
+      "四态明细",
+      "我的未结",
+      "环比",
+      "专业诊断"
+    ],
+    "keep_time_boundary_line": true,
+    "time_boundary_note": "仅保留一行『统计：<窗口>｜打款截止：<due>』，不展开解释。这是用户此前定的『通报头部必须写清统计窗口与报销确认截止』铁律，正文仍只讲金额和日期。",
+    "issue_style": "one_short_line",
+    "issue_max_items": 2,
+    "issue_max_chars": 40,
+    "issue_note": "异常合并成一行『小提示：…』，例如『2 张手写单请改发付款截图；重复发的之前记过、没多算』。最多 2 项、不超过 40 字，不列文件名/金额/订单号。没有异常就不写这一行。",
+    "no_change_wording": "本次没有新的报销，之前记过的都算数。",
+    "amount_format": "¥%.2f",
+    "date_format": "M-DD（按凭证 pay_time / receipt_date 去重升序，最多列 4 天，超出写『等 N 天』）",
+    "renderer": "scripts/driver_copy.py",
+    "safety_joke": {
+      "required": true,
+      "topic": "安全驾驶",
+      "tone": "轻松调侃、不训斥、不吓唬、不用 emoji",
+      "placement": "群内司机版最后一行，每轮必带",
+      "rotation": "按 run_id 中的日期顺序轮换（7 句一循环、连续 7 天不重复、同一天全队同句）；run_id 不含日期时回退稳定哈希",
+      "lines": [
+        "报销能等，刹车不能等；慢点开，别让下一张凭证变成修车单。",
+        "高速费我们照报，超速罚单可不报哦，路上稳着点。",
+        "钱慢慢到账，车慢慢开，人平安才是最省钱的一趟。",
+        "单据发群里就行，人别出现在事故快讯里，稳稳开。",
+        "路再赶也别抢那几秒，报销能补，安全没法补。",
+        "方向握稳、油门收着，下次报销咱还只想看过路费。",
+        "车开得稳，报销单才年年是小额，这笔账最划算。"
+      ]
+    },
+    "owner_professional_unchanged": true,
+    "owner_note": "负责人专业版一字不减：仍含四态、未结、环比、订单号尾号、原登记时间、任务链接、台账/清单路径、未写报表原因、新司机待指定报表说明。不再包含『未收到个人账本』名单（已取消司机私聊）。"
+  },
+  "reporting": {
+    "notification_mode": "group_only",
+    "adopted_at": "2026-11-14",
+    "revised_at": "2026-11-14 20:44",
+    "revision_note": "用户 2026-11-14 明确『不用发私聊给司机，发群里就好；司机是弹性的，只计算发了图片的司机；不纠结全部司机有没有到齐』：C 方案的逐司机私聊通道整体取消，退回两层（群内 + 负责人私聊）；统计对象改为本轮/本月实际有付款凭证截图的司机，不再铺全员名册；open_id 与名册到齐不再作为前置条件或待办。",
+    "amount_visibility": "public",
+    "privacy_note": "用户 2026-11-14 明确『司机报销不需要保密』：金额可在群内按司机公开列出。但订单号尾号、凭证文件名、任务链接、台账/清单路径、未写报表原因等仍只发负责人私聊——这不是保密问题，是司机看不懂的专业字段。",
+    "group_by_driver": true,
+    "show_amount_per_driver_in_group": true,
+    "single_group_message": true,
+    "group_message_style": "minimal_amount_date",
+    "active_drivers_only": true,
+    "active_drivers_definition": "只统计本轮（月报为当月）实际发了【付款凭证截图】并入账的司机；没有凭证的司机一律不出现在群内通报里，也不写『没列到名字的…』之类的零值提示。手写票/纯文本/重复提交不构成一条统计行。",
+    "roster_completeness": "not_required",
+    "roster_completeness_note": "司机人员是弹性的，不要求全员进群、不要求 open_id 补齐、不把『谁没到齐』做成异常、待办或告警。名册只用于归属辅助与报表定位。",
+    "group_message_note": "物流部群内只发【一份总览】，按本轮有凭证的司机一行写『姓名 ¥金额（日期）』＋合计＋一行小提示＋一句安全驾驶调侃；不列四态/未结/环比/笔数明细，不逐笔刷凭证，也不铺 0 笔司机。",
+    "per_driver_dm": {
+      "enabled": false,
+      "disabled_at": "2026-11-14",
+      "disabled_reason": "用户明确『不用发私聊给司机，发群里就好』。金额不保密，群内按司机公开列金额已足够；司机弹性，无法也不必保证人人有 open_id。",
+      "channel": "user_id",
+      "cli_flag": "--user-id",
+      "identity_order": [
+        "bot",
+        "user"
+      ],
+      "roster_only": true,
+      "on_legacy_manifest": "block_and_report",
+      "on_legacy_manifest_note": "为兼容可能仍带 --driver-dm-manifest 的旧自动化 prompt：配置禁用时 notify.py 必须硬拦截，返回 blocked、绝不调用 --user-id 发任何私聊，也不产生 missing_driver_dm 待办名单。",
+      "idempotency_key": "reimb-dm:<run_id>:<driver>（已停用）",
+      "max_drivers_per_run": 0
+    },
+    "channels": [
+      "group_overview",
+      "owner_professional"
+    ],
+    "note": "两层通报（2026-11-14 用户定案）：① 物流部群【一份极简总览】只列本轮实际发了付款凭证的司机，按司机一行写金额+日期，带一行小提示与一句安全驾驶调侃；② 负责人私聊【专业完整版】含四态/未结/环比/订单号尾号/任务链接/路径，一字不减。用 scripts/notify.py 一次调用同时发出。没有司机私聊通道。每轮无论有无新增/异常都发；完全无变化也发紧凑状态行（仍带调侃句）。手写票补录提醒按司机标注，只发物流部群。绝不因为『司机没到齐/缺 open_id』而催办或记为异常。"
+  },
+  "task_permissions": {
+    "assignee_role": "editor",
+    "driver_role": "viewer",
+    "note": "飞书任务角色仅支持 assignee(可编辑) 与 follower(可看+评论，不可改核心字段)。落地方式：负责人 = assignee(可编辑)；报销人 = 以 follower 加入任务(仅查看/评论，不能改金额/完成/截止)。driver_open_id 从 config.driver_open_ids 或 driver_roster.members 反查；缺失时静默跳过并仅记清单，不作为待办、异常或催办理由——司机是弹性的，不要求全员到齐。"
+  },
+  "write_policy": {
+    "allow_create_sheet": false,
+    "allow_create_row": false,
+    "on_ambiguous_cell": "skip_and_report",
+    "on_formula_cell": "skip_and_report",
+    "on_missing_report_file": "record_without_write",
+    "on_missing_target": "skip_and_report",
+    "no_report_no_create": true,
+    "note": "无报表文件的司机一律不新建报表文件/sheet/行，只登记台账（no_report=1）+ 建确认任务 + 通报注明待指定报表。"
+  },
+  "cloud_sync": {
+    "enabled": false,
+    "note": "云端同名目录默认不写，避免本地与云端各自累加造成双记；开启前必须确认哪一份是唯一主表",
+    "drive_id": "627901612",
+    "folder_2026_driver_wage": "hYkKdbVyL1Md2QtfD8u5rxRvfFTXbHLws",
+    "summary_file_id": "mDfgUFq4Q9MNLigK5xQyrxS9xBohecEoM",
+    "summary_sheet_id": 1
+  },
+  "schedule": {
+    "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+    "description": "每天 09:00（Asia/Shanghai）"
+  }
+}
