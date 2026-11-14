@@ -58,10 +58,10 @@ agent_created: true
 
 | 项 | 值 |
 |---|---|
-| 配置 | `~/.workbuddy/skills/自动报销系统/config.json`（version 6，两层通报 + 弹性司机 + 极简司机文案 `driver_message`） |
+| 配置 | `~/.workbuddy/skills/自动报销系统/reimbursement/config.json`（version 6，两层通报 + 弹性司机 + 极简司机文案 `driver_message`） |
 | 报表根 | `/Users/liaohaocheng/Desktop/WPS/冷链物流` |
 | 报表路径规则 | `{报表根}/{YYYY}年/司机工资/{司机}{YYYY}.xlsx` |
-| 状态目录 | `~/.workbuddy/skills/自动报销系统/state/`（台账 sqlite、清单、备份） |
+| 状态目录 | `~/.workbuddy/skills/自动报销系统/reimbursement/state/`（台账 sqlite、清单、备份） |
 | 拉取窗口 | 最近 `lookback_days`（默认 14）天，覆盖每日调度与补发 |
 | 降级私聊 / 负责人私聊 | `oc_2bcd38352b07ca2bcbd0bbc2ed2c390e` |
 | 确认任务负责人 | `ou_2cb69c22df2128bc1fdb9ce338b3d18f`（廖浩成本人），任务到期 3 天 |
