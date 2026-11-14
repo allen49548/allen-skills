@@ -1,15 +1,15 @@
 {
-  "name": "allen-skills",
-  "description": "allen 的多技能合集（Agent Skills，khazix 风格）：自动报销系统 + 持续新增的实用技能。",
+  "name": "reimbursement-skill",
+  "description": "冷链物流司机报销自动归集技能：飞书群付款凭证截图 → 按司机/月份统计 → 幂等去重 → 两层通报。",
   "owner": { "name": "allen" },
   "plugins": [
     {
-      "name": "allen-skills",
-      "description": "allen 的多技能合集：自动报销系统（飞书付款凭证归集）等实用技能。",
-      "version": "2.0.0",
+      "name": "reimbursement-skill",
+      "description": "自动报销系统：从飞书群读取付款凭证截图，按司机分类统计报销，幂等去重，两层通报。",
+      "version": "2.1.0",
       "source": "./",
       "strict": false,
-      "skills": ["./reimbursement"]
+      "skills": ["./"]
     }
   ]
 }

@@ -3,7 +3,7 @@
 
 # 真实运行配置（含 chat id / open_id / 本地绝对路径）
 # 入库的是脱敏模板 config.example.json，使用时复制为 config.json 再填值
-# 用 **/ 前缀，确保技能放进子目录（如 reimbursement/）后仍被忽略
+# 用 **/ 前缀，无论技能目录放在哪一层都能忽略
 **/config.json
 
 # 飞书下载的真实付款凭证截图（含司机姓名/金额/订单号）
