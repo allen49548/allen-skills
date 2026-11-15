@@ -1,5 +1,5 @@
 ---
-name: 自动报销系统
+name: reimbursement
 description: 从飞书「物流部」混合群读取【付款凭证截图】，按消息发送者识别司机（司机弹性、只统计发了图片的司机、不要求全员到齐）、按司机与月份分类统计报销，去掉重复报销（绝不重复计算），统一写入各司机报表新建的「报销明细」sheet；每轮统计后发两层通报（物流部群极简总览＋@报销人＋确认任务链接／负责人私聊精简专业版，无论有无异常）；真实报销点完成任务后群内@报销人；不发司机私聊。手写票、纯文本报销一律不记录；出现手写票时提醒相关司机改用付款凭证截图补录。适用于冷链物流/司机工资/报销归集/按司机分类统计/月度统计/付款凭证识别/去重/月份归类/每天定时同步等请求。定义群白名单与停用群、弹性司机归属、报表定位规则、幂等台账、备份、通报模板与发送降级链。核心铁律：同一笔报销只入账一次（以订单号+支付时间为准），重复提交必须注明原登记时间与是否已报销；报销人仅可查看任务、负责人可编辑。
 agent_created: true
 ---
@@ -58,13 +58,25 @@ agent_created: true
 
 | 项 | 值 |
 |---|---|
-| 配置 | `~/.workbuddy/skills/自动报销系统/config.json`（version 6，两层通报 + 弹性司机 + 极简司机文案 `driver_message`） |
+| 配置 | `~/.workbuddy/skills/reimbursement/config.json`（version 6，两层通报 + 弹性司机 + 极简司机文案 `driver_message`） |
 | 报表根 | `/Users/liaohaocheng/Desktop/WPS/冷链物流` |
 | 报表路径规则 | `{报表根}/{YYYY}年/司机工资/{司机}{YYYY}.xlsx` |
-| 状态目录 | `~/.workbuddy/skills/自动报销系统/state/`（台账 sqlite、清单、备份） |
+| 状态目录 | `~/.workbuddy/skills/reimbursement/state/`（台账 sqlite、清单、备份） |
 | 拉取窗口 | 最近 `lookback_days`（默认 14）天，覆盖每日调度与补发 |
 | 降级私聊 / 负责人私聊 | `oc_2bcd38352b07ca2bcbd0bbc2ed2c390e` |
 | 确认任务负责人 | `ou_2cb69c22df2128bc1fdb9ce338b3d18f`（廖浩成本人），任务到期 3 天 |
+
+### 输入输出方式配置化（`adapters`，2026-11-15 新增）
+
+`config.json` 顶层新增 `adapters`：**参数归参数，方式归方式**。
+
+- 原有顶层键（`chat_whitelist` / `ocr` / `report_root` / `reporting` / `group_task` / `lookback_days` …）仍是**唯一真源**，值一律不变。
+- `adapters.input` 声明消息来源通道、读取客户端与身份、可接受的文档形态、拉取窗口与增量策略；`adapters.output` 声明写入目标、通报通道、确认任务后端、各通道渲染器与字段可见性。
+- 所有 `*_ref` 只是指向上述参数块的**引用**，不得在 `adapters` 里再写一份值，避免双真源。
+- 当前 `resolution = "declarative"`：这是**声明式契约**，现有脚本不读取该节、仍按内建默认实现运行，两条定时自动化行为与改造前完全一致。要把 `type` 切到 `alternatives` 里的其他方式，必须先实现对应适配器与分发逻辑，否则启动即报错。
+- 逐字段说明见 `references/io-configuration.md`；开源侧同一契约见 `document-intake-ledger/config.schema.md`。
+
+**切换任何输入/输出方式都不得削弱**：四层去重、只有「已登记·待打款」计入未结、`record_without_write`、备份＋回读校验＋失败回滚、`--driver-dm-manifest` 硬拦截、无论有无变化两层都发通报。
 
 ### 状态口径（区分「报销完成 / 未报销」，2026-11-14 定案）
 

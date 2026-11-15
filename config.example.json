@@ -269,5 +269,112 @@
   "schedule": {
     "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
     "description": "每天 09:00（Asia/Shanghai）"
+  },
+  "adapters": {
+    "schema_version": 1,
+    "resolution": "declarative",
+    "note": "只声明「方式」，不重复「参数」；所有 *_ref 指向现有顶层配置块，那里是唯一真源。当前为声明式契约：脚本仍按内建默认实现运行，切换 type 前须先实现对应适配器与分发逻辑。默认值与改造前行为完全一致。",
+    "input": {
+      "source": {
+        "type": "im_group",
+        "adapter_ref": "chat_discovery",
+        "allowlist_ref": "chat_whitelist",
+        "retired_ref": "retired_chats",
+        "discovery_ref": "chat_discovery",
+        "mode": "shared",
+        "alternatives": ["local_directory", "http_api", "message_queue"]
+      },
+      "client": {
+        "adapter": "lark-cli im +chat-messages-list",
+        "identity": "user",
+        "download_attachments": true,
+        "attachment_dir": "lark-im-resources",
+        "page_all": true,
+        "order": "asc",
+        "no_reactions": true,
+        "identity_fallback": "none",
+        "alternatives": ["sdk", "http_api"],
+        "note": "--as bot 会报 230002（机器人不在群内），当前固定 user；改身份前须确认机器人已入群"
+      },
+      "documents": {
+        "accepted_ref": "ocr.accepted_source",
+        "unsupported_ref": "ocr.on_handwritten_receipt",
+        "ignored_ref": "ocr.on_text_only_claim",
+        "confidence_ref": "ocr.min_confidence",
+        "manual_review_ref": "ocr.undated_receipt",
+        "extractor": "ViewImage",
+        "supported_shapes": ["image"],
+        "alternatives": ["pdf", "structured_json", "vision_only", "structured_only"]
+      },
+      "window": {
+        "strategy": "lookback_days",
+        "lookback_ref": "lookback_days",
+        "clock": "system_date",
+        "incremental": false,
+        "full_rescan_each_run": true,
+        "skip": ["system_message", "recalled_message"],
+        "period_field_priority": ["pay_time", "receipt_date", "created_at"],
+        "alternatives": ["incremental_cursor", "webhook_events"]
+      }
+    },
+    "output": {
+      "write": {
+        "type": "xlsx_detail_sheet",
+        "adapter": "scripts/reimb_detail.py",
+        "target_ref": "report_root",
+        "sheet_ref": "report_detail_sheet",
+        "policy_ref": "write_policy",
+        "idempotency_key": "message_id",
+        "alternatives": ["csv", "database", "none"]
+      },
+      "notifications": {
+        "adapter": "scripts/notify.py",
+        "channels_ref": "reporting",
+        "send_on_no_change_ref": "reporting",
+        "channels": [
+          {
+            "id": "group_overview",
+            "type": "im_group",
+            "renderer": "scripts/driver_copy.py",
+            "format": "minimal",
+            "fields_visible": ["amount", "date", "mention_submitter", "task_url"],
+            "fields_hidden": ["status_model", "balance", "comparison", "record_count", "order_no", "file_name", "paths"]
+          },
+          {
+            "id": "owner_detail",
+            "type": "im_direct_message",
+            "renderer": "scripts/owner_copy.py",
+            "format": "compact_professional",
+            "max_lines_hint": 25,
+            "fields_visible": ["all_operational_fields"]
+          },
+          {
+            "id": "per_driver_dm",
+            "type": "im_direct_message",
+            "enabled": false,
+            "hard_blocked": true
+          }
+        ],
+        "alternatives": ["webhook", "none"]
+      },
+      "tasks": {
+        "backend_ref": "group_task",
+        "adapter": "scripts/group_task.py",
+        "batching_ref": "group_task.batching",
+        "editor_role_ref": "task_permissions",
+        "viewer_role_ref": "task_permissions",
+        "poll_completion": true,
+        "alternatives": ["none", "custom_http"]
+      },
+      "rendering": {
+        "renderer_registry": {
+          "group_overview": "scripts/driver_copy.py",
+          "owner_detail": "scripts/owner_copy.py"
+        },
+        "field_visibility_ref": "adapters.output.notifications.channels",
+        "policy_hooks_ref": "driver_message",
+        "tone_hooks_enabled": true
+      }
+    }
   }
 }
