@@ -325,6 +325,9 @@
         "sheet_ref": "report_detail_sheet",
         "policy_ref": "write_policy",
         "idempotency_key": "message_id",
+        "fields_visible_ref": "report_detail_sheet.columns.visible",
+        "fields_hidden_ref": "report_detail_sheet.columns.hidden_technical",
+        "grouping_ref": "report_detail_sheet.columns.month_grouping",
         "alternatives": ["csv", "database", "none"]
       },
       "notifications": {

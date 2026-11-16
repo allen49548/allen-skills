@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""统一「报销明细」sheet 写入（2026-11-14 23:53 用户新口径）。
+"""统一「报销明细」sheet 写入（2026-11-14 23:53 建表 / 2026-11-15 21:38 精简列 + 按月分节）。
 
-用户原话：「为了兼容表格数据，你可以在表格内新建一个报销明细。这样就不会有兼容的问题了。
+用户原话（建表）：「为了兼容表格数据，你可以在表格内新建一个报销明细。这样就不会有兼容的问题了。
 所有的表单统一在表内建一个报销明细。」
+用户原话（2026-11-15 21:38 精简）：「报销系统输出的数据字段太多了，只保留核心数据即可，
+日期，订单号，类型，金额！每个月放一起」
+
+可见列只有 4 个：日期 / 订单号 / 类型 / 金额(元)。
+第 5 列「唯一键」是**隐藏技术列**（WPS/Excel 中不可见），仍然存 message_id：
+  reimb_detail.py 靠它做逐行幂等，去掉会让重跑重复追加行 —— 这会直接违反
+  「同一笔报销只入账一次」铁律。台账 sqlite 仍保留全部字段，审计能力不损失。
+
+「每个月放一起」= 同一个「报销明细」sheet 内按凭证月份升序分节：
+  「2026年11月（共 32 笔 ¥1737.06）」标题行 + 该月逐笔明细，末尾一行总计。
+  不新建月份 sheet（唯一报销明细 sheet 的规则不变），不新建行到原有月份 sheet。
 
 为什么要 zip 层精确插入，而不是 openpyxl 整体 save：
   司机工资表是 WPS 生成的 xlsx，含 customXml/、tables/、comments、vmlDrawing、
   dbsheet 命名空间等 openpyxl 不认识或不保真的部件。整体重写会丢特性、改公式引用。
   本脚本只改 4 个清单类部件并新增 1 个 worksheet 部件，其余所有部件字节原样复制。
-
-写入目标统一为「报销明细」sheet，不再去猜各司机原表里位置不一的「报销 / 报销支出」
-汇总单元格（歧义 / 公式 / 无数值等兼容问题由此彻底消失）。
 
 用法：
   python3 scripts/reimb_detail.py apply --data <data.json>
@@ -18,10 +26,10 @@
 
 data.json:
 {
-  "run_id": "2026-11-14_2353",
+  "run_id": "2026-11-15_2140",
   "year": 2026,
-  "backup_dir": "state/backups/2026-11-14_2353",
-  "precreate_all": true,          // 给该年份目录下所有司机报表预建「报销明细」
+  "backup_dir": "state/backups/2026-11-15_2140",
+  "precreate_all": true,          // 给该年份目录下所有司机报表预建/迁移「报销明细」
   "entries": [                    // 本轮新增入账条目，按 driver 分组追加
     {"driver":"王博成","key":"om_xxx","receipt_date":"2026-11-11",
      "pay_time":"2026-11-11 12:49:53","amount":45.14,"order_no":"...",
@@ -29,6 +37,9 @@ data.json:
      "entry_id":"30","task_url":"...","note":""}
   ]
 }
+
+旧 13 列布局（唯一键/司机/消费日期/支付时间/金额/订单号/费用类别/…）由 apply
+自动识别并整表迁移为 4 列 + 隐藏键，无需单独迁移命令；迁移同样先备份、后校验、失败回滚。
 
 输出 JSON：{"ok", "backup_dir", "files":[{file, action, rows_added, total_rows,
             total_amount, verify}], "errors":[]}
@@ -40,18 +51,25 @@ import re
 import shutil
 import sys
 import zipfile
-from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import escape as xml_escape, unescape as xml_unescape
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
 SHEET_NAME = "报销明细"
 NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-HEADERS = ["唯一键", "司机", "消费日期", "支付时间", "金额(元)", "订单号", "费用类别",
-           "商户/说明", "凭证文件名", "消息时间", "台账ID", "确认任务链接", "备注"]
-# 金额列索引（0-based）：E 列 = 4
-AMOUNT_COL = 4
-KEY_COL = 0
+
+# 4 个可见字段 + 1 个隐藏技术列（幂等键，绝不参与展示）
+HEADERS = ["日期", "订单号", "类型", "金额(元)", "唯一键"]
+WIDTHS = [14, 32, 18, 12, 0]
+HIDDEN_COLS = {4}                 # E 列隐藏
+AMOUNT_COL = 3                    # D 列 = 金额
+KEY_COL = 4                       # E 列 = 隐藏唯一键
+DATE_COL = 0                      # A 列 = 日期
+ORDER_COL = 1                     # B 列 = 订单号
+TYPE_COL = 2                      # C 列 = 类型
+SKIP_KEYS = {"", "唯一键", "合计"}
+NO_MONTH = "未标月份"
 
 
 def load_config():
@@ -94,30 +112,68 @@ def row_xml(r, values, amount_col=AMOUNT_COL):
     return '<row r="%d">%s</row>' % (r, "".join(cells))
 
 
-def entry_values(e, driver):
+def receipt_date(e):
+    """日期：消费日期 → 支付时间 → 消息时间 → 台账创建时间。"""
+    for k in ("receipt_date", "pay_time", "message_time", "created_at"):
+        v = str(e.get(k) or "").strip()
+        if v:
+            return v[:10]
+    return ""
+
+
+def entry_values(e):
+    """新入账条目 → 4 可见字段 + 隐藏唯一键。"""
     return [
-        e.get("key") or e.get("message_id") or "",
-        driver,
-        e.get("receipt_date") or "",
-        e.get("pay_time") or "",
-        e.get("amount") or 0,
+        receipt_date(e),
         e.get("order_no") or "",
         e.get("category") or "",
-        e.get("merchant") or "",
-        e.get("image_file") or "",
-        e.get("message_time") or "",
-        e.get("entry_id") or "",
-        e.get("task_url") or "",
-        e.get("note") or "",
+        e.get("amount") or 0,
+        e.get("key") or e.get("message_id") or "",
     ]
 
 
+def month_key(date_str):
+    m = re.match(r"(\d{4})-(\d{2})", str(date_str or ""))
+    return "%s-%s" % (m.group(1), m.group(2)) if m else NO_MONTH
+
+
+def month_label(key, count, amount):
+    if key == NO_MONTH:
+        return "%s（共 %d 笔 ¥%.2f）" % (NO_MONTH, count, amount)
+    y, m = key.split("-")
+    return "%s年%d月（共 %d 笔 ¥%.2f）" % (y, int(m), count, amount)
+
+
+def build_display_rows(records):
+    """把结构化明细按月份分节展开为 sheet 行（不含表头/合计由调用方加）。"""
+    groups = {}
+    for rec in records:
+        groups.setdefault(month_key(rec["date"]), []).append(rec)
+    # 未标月份永远排最后；组内按日期升序，同日保持原有顺序（稳定排序，保证幂等）
+    ordered = sorted(groups, key=lambda k: (k == NO_MONTH, k))
+    out = []
+    for k in ordered:
+        items = sorted(groups[k], key=lambda x: (x["date"] == "", x["date"]))
+        sub = round(sum(float(x["amount"] or 0) for x in items), 2)
+        out.append([month_label(k, len(items), sub), "", "", "", ""])
+        for rec in items:
+            out.append([rec["date"], rec["order_no"], rec["category"],
+                        rec["amount"], rec["key"]])
+    return out
+
+
 def sheet_xml(rows):
-    """rows: list of (row_number, values, is_total)"""
-    widths = [30, 10, 12, 20, 12, 30, 14, 28, 46, 20, 9, 52, 30]
-    cols = "".join('<col min="%d" max="%d" width="%d" customWidth="1"/>' % (i + 1, i + 1, w)
-                   for i, w in enumerate(widths))
-    body = "".join(row_xml(r, v) for r, v, _ in rows)
+    """rows: list of (row_number, values)。E 列隐藏，只展示 4 个核心字段。"""
+    col_defs = []
+    for i, w in enumerate(WIDTHS):
+        if i in HIDDEN_COLS:
+            col_defs.append('<col min="%d" max="%d" width="0" hidden="1" customWidth="1"/>'
+                            % (i + 1, i + 1))
+        else:
+            col_defs.append('<col min="%d" max="%d" width="%d" customWidth="1"/>'
+                            % (i + 1, i + 1, w))
+    cols = "".join(col_defs)
+    body = "".join(row_xml(r, v) for r, v in rows)
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
             '<worksheet xmlns="%s"><dimension ref="A1:%s%d"/>'
             '<sheetViews><sheetView workbookViewId="0">'
@@ -130,9 +186,8 @@ def sheet_xml(rows):
             '</worksheet>') % (NS_MAIN, col_letter(len(HEADERS) - 1), max(1, len(rows)), cols, body)
 
 
-def total_row(r, amount):
-    vals = ["合计", "", "", "", round(float(amount), 2)] + [""] * (len(HEADERS) - 5)
-    return (r, vals, True)
+def total_row(amount):
+    return ["合计", "", "", round(float(amount), 2), ""]
 
 
 def read_parts(path):
@@ -159,25 +214,98 @@ def find_detail_sheet(parts):
     return part, rid.group(1)
 
 
-def extract_existing_rows(xml_text):
-    """从已有明细 sheet 提取 (row_xml, 唯一键, 金额)，用于幂等追加与合计重算。"""
-    m = re.search(r"<sheetData>(.*?)</sheetData>", xml_text, re.S)
-    if not m:
+def read_shared_strings(parts):
+    """WPS/Excel 保存后会把 inlineStr 转成共享字符串，必须解析才能读出唯一键。"""
+    raw = next((d for i, d in parts if i.filename == "xl/sharedStrings.xml"), None)
+    if raw is None:
         return []
+    txt = raw.decode("utf-8")
     out = []
-    for rm in re.finditer(r"<row\b[^>]*>.*?</row>", m.group(1), re.S):
-        raw = rm.group(0)
-        first = re.search(r'<c r="A\d+"[^>]*>.*?<t[^>]*>(.*?)</t>', raw, re.S)
-        key = first.group(1) if first else ""
-        amt_m = re.search(r'<c r="E\d+"[^>]*>\s*<v>([^<]+)</v>', raw)
-        amt = 0.0
-        if amt_m:
-            try:
-                amt = float(amt_m.group(1))
-            except ValueError:
-                amt = 0.0
-        out.append((raw, key, amt))
+    for si in re.findall(r"<si\b[^>]*>(.*?)</si>", txt, re.S):
+        out.append(xml_unescape("".join(re.findall(r"<t[^>]*>(.*?)</t>", si, re.S))))
     return out
+
+
+def parse_cells(raw_row, shared=None):
+    """解析一行内各单元格的值，返回 {列字母: 文本值}。
+
+    兼容三种写法：inlineStr（脚本自写）、t="s" 共享字符串（WPS/Excel 保存后）、纯数值。
+    """
+    shared = shared or []
+    out = {}
+    for cm in re.finditer(r'<c r="([A-Z]+)\d+"([^>]*)>(.*?)</c>', raw_row, re.S):
+        col, attrs, inner = cm.group(1), cm.group(2), cm.group(3)
+        t = re.search(r'<t[^>]*>(.*?)</t>', inner, re.S)
+        v = re.search(r"<v>(.*?)</v>", inner, re.S)
+        if 't="s"' in attrs and v:
+            try:
+                idx = int(v.group(1))
+                s = shared[idx] if 0 <= idx < len(shared) else ""
+            except ValueError:
+                s = ""
+        else:
+            s = t.group(1) if t else (v.group(1) if v else "")
+        out[col] = xml_unescape(s)
+    return out
+
+
+def to_float(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_existing_records(xml_text, shared=None):
+    """把已有明细 sheet 解析成结构化记录，兼容旧 13 列布局并自动迁移。
+
+    返回 (records, layout, month_group_count)。
+      records: [{date, order_no, category, amount, key}, ...]
+      layout:  "v2" = 4 列 + 隐藏键（当前）；"v1" = 旧 13 列；"empty" = 空表
+    """
+    m = re.search(r"<sheetData>(.*?)</sheetData>", xml_text or "", re.S)
+    if not m:
+        return [], "empty", 0
+    raw_rows = re.findall(r"<row\b[^>]*>.*?</row>", m.group(1), re.S)
+    if not raw_rows:
+        return [], "empty", 0
+    first = parse_cells(raw_rows[0], shared)
+    head_a = (first.get("A") or "").strip()
+    layout = "v1" if head_a == "唯一键" else ("v2" if head_a == "日期" else "empty")
+    if layout == "empty":
+        return [], "empty", 0
+
+    records = []
+    month_rows = 0
+    for raw in raw_rows[1:]:
+        c = parse_cells(raw, shared)
+        if layout == "v1":
+            key = (c.get("A") or "").strip()
+            if key in SKIP_KEYS:
+                continue
+            date = (c.get("C") or "").strip()[:10] or (c.get("D") or "").strip()[:10] \
+                or (c.get("J") or "").strip()[:10]
+            rec = {
+                "key": key,
+                "date": date,
+                "order_no": (c.get("F") or "").strip(),
+                "category": (c.get("G") or "").strip(),
+                "amount": to_float((c.get("E") or "").strip()),
+            }
+        else:
+            key = (c.get("E") or "").strip()
+            # 月份分节行与合计行的隐藏键列为空，不是明细
+            if key in SKIP_KEYS:
+                continue
+            rec = {
+                "key": key,
+                "date": (c.get("A") or "").strip(),
+                "order_no": (c.get("B") or "").strip(),
+                "category": (c.get("C") or "").strip(),
+                "amount": to_float((c.get("D") or "").strip()),
+            }
+        records.append(rec)
+    return records, layout, month_rows
 
 
 def next_ids(parts):
@@ -246,22 +374,36 @@ def write_zip(path, parts, replacements, additions):
 
 
 def verify(path, before_parts, changed_names, expect_rows, expect_amount):
-    """回读校验：未改部件字节完全一致 + openpyxl 能打开 + 明细行数/金额一致。"""
+    """回读校验：未改部件字节完全一致 + openpyxl 能打开 + 明细行数/金额一致。
+
+    明细行判定改为「隐藏 E 列（唯一键）非空且非表头」，月份分节行不计入。
+    金额统一取 D 列（4 列布局）。
+    """
     after = {i.filename: d for i, d in read_parts(path)}
     before = {i.filename: d for i, d in before_parts}
     diffs = [n for n in before if n not in changed_names and before.get(n) != after.get(n)]
+    ws_parts = [n for n in changed_names if n.startswith("xl/worksheets/")]
     result = {"unchanged_parts": len(before) - len(changed_names),
               "unexpected_diffs": diffs, "openpyxl_ok": False,
-              "detail_rows": 0, "detail_amount": 0.0, "sheet_present": False}
+              "detail_rows": 0, "detail_amount": 0.0, "sheet_present": False,
+              "hidden_key_column": any(b'hidden="1"' in after.get(n, b"") for n in ws_parts)}
     try:
         import openpyxl
         wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
         result["sheet_present"] = SHEET_NAME in wb.sheetnames
         ws = wb[SHEET_NAME]
         vals = list(ws.values)
-        body = [r for r in vals[1:] if r and str(r[0] or "").strip() not in ("", "合计")]
+        body = []
+        for r in vals[1:]:
+            if not r:
+                continue
+            key = str(r[KEY_COL] or "").strip() if len(r) > KEY_COL else ""
+            if key in SKIP_KEYS:
+                continue
+            body.append(r)
         result["detail_rows"] = len(body)
-        result["detail_amount"] = round(sum(float(r[AMOUNT_COL] or 0) for r in body), 2)
+        result["detail_amount"] = round(sum(to_float(r[AMOUNT_COL]) for r in body), 2)
+        result["visible_headers"] = [str(x or "") for x in (vals[0] if vals else [])][:4]
         result["openpyxl_ok"] = True
         result["sheet_count"] = len(wb.sheetnames)
         wb.close()
@@ -275,8 +417,9 @@ def verify(path, before_parts, changed_names, expect_rows, expect_amount):
 
 
 def apply_one(path, entries, backup_dir):
-    """在单个 xlsx 内建/写「报销明细」。返回 (result_dict, error_or_None)。"""
+    """在单个 xlsx 内建/写/迁移「报销明细」。返回 (result_dict, error_or_None)。"""
     parts = read_parts(path)
+    shared = read_shared_strings(parts)
     detail_part, _ = find_detail_sheet(parts)
     created = detail_part is None
     before = {i.filename: d for i, d in parts}
@@ -293,55 +436,32 @@ def apply_one(path, entries, backup_dir):
             if name in before:
                 replacements[name] = fn(before[name].decode("utf-8")).encode("utf-8")
                 changed.add(name)
-        existing = []          # (row_xml, key, amount)
+        existing, layout = [], "empty"
         additions[detail_part] = ""
         changed.add(detail_part)
     else:
-        existing = extract_existing_rows(before[detail_part].decode("utf-8"))
+        existing, layout, _ = parse_existing_records(before[detail_part].decode("utf-8"), shared)
         changed.add(detail_part)
 
-    # 丢弃旧合计行；已有业务键做幂等
-    existing = [x for x in existing if x[1] not in ("", "唯一键", "合计")]
-    seen = {x[1] for x in existing}
+    # 幂等：已有唯一键不再追加
+    seen = {x["key"] for x in existing}
     fresh = []
     for e in entries:
         k = e.get("key") or e.get("message_id") or ""
         if k in seen:
             continue
         seen.add(k)
-        fresh.append(e)
+        v = entry_values(e)
+        fresh.append({"key": v[4], "date": v[0], "order_no": v[1],
+                      "category": v[2], "amount": v[3]})
 
-    rows = []
-    r = 1
-    rows.append((r, HEADERS, False))
-    r += 1
-    amount_sum = 0.0
-    for raw, key, amt in existing:
-        # 保留原行 XML，仅把行号重写（行号从 2 连续递增）
-        raw2 = re.sub(r'(<row\b[^>]*\br=")\d+(")', lambda m: m.group(1) + str(r) + m.group(2), raw, count=1)
-        raw2 = re.sub(r'(<c r=")([A-Z]+)(\d+)(")',
-                      lambda m: m.group(1) + m.group(2) + str(r) + m.group(4), raw2)
-        rows.append((r, raw2, True))   # 标记 raw 模式
-        amount_sum += amt
-        r += 1
-    for e in fresh:
-        rows.append((r, entry_values(e, e.get("driver") or ""), False))
-        amount_sum += float(e.get("amount") or 0)
-        r += 1
-    rows.append((r, total_row(r, amount_sum)[1], False))
+    records = existing + fresh
+    display = build_display_rows(records)
+    amount_sum = round(sum(float(x["amount"] or 0) for x in records), 2)
 
-    # 生成 sheetData：raw 模式的行直接插入
-    body = []
-    for rr, v, is_raw in rows:
-        if is_raw:
-            body.append(v)
-        else:
-            body.append(row_xml(rr, v))
-    sheet = sheet_xml([])  # 仅取外壳
-    sheet = re.sub(r"<sheetData>.*?</sheetData>", "<sheetData>%s</sheetData>" % "".join(body),
-                   sheet, flags=re.S)
-    sheet = re.sub(r'<dimension ref="A1:[A-Z]+\d+"',
-                   '<dimension ref="A1:%s%d"' % (col_letter(len(HEADERS) - 1), len(rows)), sheet)
+    values = [HEADERS] + display + [total_row(amount_sum)]
+    rows = [(i + 1, v) for i, v in enumerate(values)]
+    sheet = sheet_xml(rows)
     if created:
         additions[detail_part] = sheet.encode("utf-8")
     else:
@@ -353,17 +473,20 @@ def apply_one(path, entries, backup_dir):
     shutil.copy2(path, backup)
     write_zip(path, parts, replacements, additions)
 
-    expect_rows = len(existing) + len(fresh)
-    v = verify(path, parts, changed, expect_rows, round(amount_sum, 2))
+    expect_rows = len(records)
+    v = verify(path, parts, changed, expect_rows, amount_sum)
     if not v["ok"]:
         # 校验失败立即回滚
         shutil.copy2(backup, path)
         v["rolled_back"] = True
     return {
-        "file": path, "action": "created" if created else "appended",
-        "detail_part": detail_part, "rows_added": len(fresh),
+        "file": path, "action": "created" if created else ("migrated" if layout == "v1" else "appended"),
+        "layout_before": layout, "detail_part": detail_part,
+        "rows_added": len(fresh),
         "rows_skipped_duplicate": len(entries) - len(fresh),
-        "total_rows": expect_rows, "total_amount": round(amount_sum, 2),
+        "total_rows": expect_rows, "total_amount": amount_sum,
+        "month_sections": sum(1 for x in display if x[1] == "" and x[2] == ""
+                              and x[3] == "" and x[4] == ""),
         "backup": backup, "verify": v,
     }, (None if v["ok"] else "回读校验失败，已回滚：%s" % json.dumps(v, ensure_ascii=False)[:400])
 
@@ -400,6 +523,7 @@ def cmd_apply(args):
         if err:
             errors.append({"file": p, "error": err})
     return {"ok": not errors, "run_id": run_id, "sheet": SHEET_NAME,
+            "visible_columns": HEADERS[:4], "hidden_columns": HEADERS[4:],
             "backup_dir": backup_dir, "files": files, "errors": errors}
 
 
@@ -410,10 +534,11 @@ def cmd_inspect(args):
            "detail_part": detail_part, "rel_id": rid}
     if detail_part:
         raw = next((d.decode("utf-8") for i, d in parts if i.filename == detail_part), "")
-        rows = extract_existing_rows(raw)
-        body = [x for x in rows if x[1] not in ("", "唯一键", "合计")]
-        out["rows"] = len(body)
-        out["amount"] = round(sum(x[2] for x in body), 2)
+        records, layout, _ = parse_existing_records(raw, read_shared_strings(parts))
+        out["layout"] = layout
+        out["rows"] = len(records)
+        out["amount"] = round(sum(float(x["amount"] or 0) for x in records), 2)
+        out["months"] = sorted({month_key(x["date"]) for x in records})
         out["sheets"] = re.findall(r'<sheet[^>]*name="([^"]+)"',
                                    next(d.decode("utf-8") for i, d in parts
                                         if i.filename == "xl/workbook.xml"))
