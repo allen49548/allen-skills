@@ -10,7 +10,7 @@
 
   classify  按发送者判定角色与能力边界（owner=admin / driver=limited / unknown=limited）
   detect    从 lark-cli 拉下来的群消息 JSON 中检测「艾特机器人」事件
-  ack       渲染「调侃 + 有温度」的收到文案；--send 时按白名单发到主群（先回应）
+  ack       渲染「调侃 + 有温度」的收到文案；--send 时按白名单发到主群（先回应，固定本机器人 --as bot，不降级个人身份）
 
 权限分级（mention_policy.roles，config 唯一真源，脚本仅给默认兜底）：
   admin    负责人（owner_open_id / mention_policy.admin.open_ids）：可处理异常、改规则/配置/代码
@@ -255,7 +255,12 @@ def render_ack(cfg, role_key, run_id, name=None):
 
 
 def send_group(cfg, text, run_id, chat_id=None, dry_run=False):
-    """把 ack 发到主群（白名单精确校验 + bot→user 降级 + 幂等键）。"""
+    """把 ack 发到主群（白名单精确校验 + 固定本机器人身份 + 幂等键）。
+
+    用户 2026-11-16 16:27 定案：「回复用本机器人回复就行」。「收到」回应固定用
+    机器人自身身份（--as bot）发，绝不降级到负责人个人 user 身份。
+    身份由 mention_policy.ack.identity 决定，默认且仅 ["bot"]。
+    """
     group = chat_id or (cfg.get("chat_discovery") or {}).get("primary_chat_id")
     wl = (cfg.get("chat_whitelist") or {}).get(group)
     if not wl or not wl.get("notify"):
@@ -263,7 +268,11 @@ def send_group(cfg, text, run_id, chat_id=None, dry_run=False):
     prefix = rc_get(cfg, "idempotency_prefix", "reimb")
     klen = int(rc_get(cfg, "chat_id_key_len", 8))
     key = "%s-ack-%s-%s" % (prefix, run_id, (group or "")[:klen])
-    identities = rc_get(cfg, "lark_identity_fallback", ["bot", "user"])
+    # 固定用本机器人发「收到」；不读通用 fallback，绝不降级到 user 个人身份。
+    # 即便配置被误填成 ["bot","user"]，这里也强制只保留 bot。
+    ack_cfg = (cfg.get("mention_policy") or {}).get("ack") or {}
+    configured = ack_cfg.get("identity") or ["bot"]
+    identities = [x for x in configured if x == "bot"] or ["bot"]
     errors = []
     for identity in identities:
         argv = ["lark-cli", "im", "+messages-send", "--as", identity,

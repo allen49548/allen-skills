@@ -6,6 +6,7 @@
 >    统一由 `scripts/mention.py ack --role <admin|limited> --run-id <run> --send` 渲染并发送；
 >    句库在 `config.mention_policy.ack.lines`，按 run_id 日期轮换，同一轮同一句，不用 emoji。
 >    幂等键 `reimb-ack-<run>-<chat前8位>`，重跑不重复刷屏。
+>    **回应固定用本机器人 `--as bot` 发（`ack.identity=["bot"]`，2026-11-16 16:27 用户定案），绝不降级到负责人个人 `--as user`；配置误填也被脚本强制过滤。注意：这是「收到」回应，与下方两层通报的 bot→user→私聊降级链不同——通报仍按降级链确保送达。**
 > 2. 「**负责人@机器人可处理异常+改规则；司机@只能正常报销，不能改规则/改代码**」
 >    → 以发送者 **open_id** 客观判定（`scripts/mention.py classify`）：
 >    `admin`（`mention_policy.admin.open_ids` 命中，缺省=owner_open_id）= 全部权限；

@@ -61,6 +61,7 @@ agent_created: true
 **铁律一：先回应，再执行（ack-first）**
 - 任何人 @ 机器人（负责人或司机），**第一步必须先发一句调侃、有温度的「收到」到主群**（`mention.py ack --send`），然后才进入报销归集或规则处理流程。绝不闷头干活不吭声。
 - 文案由 `mention.py ack` 按 `config.mention_policy.ack.lines[role]` 渲染，按 `run_id` 日期稳定轮换、同一轮同一句；轻松调侃、有温度、不训斥、不用 emoji。owner 与司机各有句库。
+- **回应固定用本机器人发（2026-11-16 16:27 用户定案）**：`mention.py ack --send` 只用 `--as bot`（`mention_policy.ack.identity=["bot"]`），**绝不降级到负责人个人 `--as user` 身份**；配置即使误填 user 也被脚本强制过滤，只发一次、只发 bot。bot 不在群内时回应失败要如实报告，不改用个人号。注意这与「报销两层通报」的身份降级链（bot→user→私聊）是两回事——通报仍按原降级链确保送达。
 - ack 幂等键 `<prefix>-ack-<run_id>-<chat_id前8位>`，重跑不重复刷屏。
 
 **铁律二：权限分级（最小权限）**
@@ -268,7 +269,7 @@ agent_created: true
 
 | 文件 | 用途 |
 |---|---|
-| `config.json` | **version 6**：唯一主群、停用群、弹性司机名册、`reporting.active_drivers_only` / `notification_mode=group_only` / `per_driver_dm.enabled=false`、路径、阈值；`driver_message` = 极简司机文案口径 + 安全驾驶调侃句库；`mention_policy` = @ 触发权限分级（admin/limited）+ 先调侃回应句库；`runtime` = 原散落脚本的硬编码默认值（可不填） |
+| `config.json` | **version 6**：唯一主群、停用群、弹性司机名册、`reporting.active_drivers_only` / `notification_mode=group_only` / `per_driver_dm.enabled=false`、路径、阈值；`driver_message` = 极简司机文案口径 + 安全驾驶调侃句库；`mention_policy` = @ 触发权限分级（admin/limited）+ 先调侃回应句库 + `ack.identity=["bot"]`（回应只用机器人、不降级个人号）；`runtime` = 原散落脚本的硬编码默认值（可不填） |
 | `config.example.json` | 入库的脱敏配置模板，含完整的 `runtime` 节与默认值 |
 | `scripts/runtime_config.py` | 运行时配置单一入口：配置优先、原值兜底；`current_year()` / `state_dir()` 等共享 helper |
 | `scripts/driver_roster.py` | 名册同步（可选，仅提升精度）、逐条司机归属解析（含 `is_new_driver` 弹性归属）、名册列表 |
@@ -283,4 +284,4 @@ agent_created: true
 | `scripts/notify.py` | 白名单精确校验 + 两层飞书发送（群 / 负责人）+ 降级 + 幂等键；对 `--driver-dm-manifest` 硬拦截，绝不发司机私聊 |
 | `scripts/group_task.py` | 按司机分组的报销确认飞书任务（create / check / pending） |
 | `scripts/monthly_summary.py` | 按司机分类 + 四态拆分的月初月报（compute / send / dry-run）；只列当月有凭证的司机，专业版保留四态/环比，群内版由 `driver_copy.py` 极简渲染 |
-| `scripts/mention.py` | **@ 触发权限分级 + 调侃回应**：`detect`（从群消息检 @ 机器人事件）/ `classify`（按 open_id 判 admin/limited 与 allowed/denied）/ `ack`（渲染调侃有温度的收到，`--send` 按白名单先发群）；幂等键 `reimb-ack-<run>-<chat>` |
+| `scripts/mention.py` | **@ 触发权限分级 + 调侃回应**：`detect`（从群消息检 @ 机器人事件）/ `classify`（按 open_id 判 admin/limited 与 allowed/denied）/ `ack`（渲染调侃有温度的收到，`--send` 按白名单先发群、**固定 `--as bot` 不降级个人 user**）；幂等键 `reimb-ack-<run>-<chat>` |
