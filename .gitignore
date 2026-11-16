@@ -21,6 +21,9 @@
 # 发送记录（运行态）
 **/state/monthly_sent.json
 
+# 任务完成通知幂等记录（运行态，含真实 task_id）
+**/state/task_completion_notified.json
+
 # Python
 __pycache__/
 *.py[cod]

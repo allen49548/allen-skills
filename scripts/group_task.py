@@ -171,10 +171,11 @@ def _task_completed(task_obj):
 
 
 def _notify_completion(cfg, driver, count, amount, task_id, dry_run=False):
-    """真实报销后点完成任务 → 群内 @报销人（2026-11-14 23:53 用户新口径）。
+    """[默认停用] 真实报销后点完成任务 → 群内 @报销人（2026-11-14 23:53 用户旧口径）。
 
-    用户原话：「真实报销后点击完成任务（任务内容也要精简），要在群内@报销人。」
-    只发一条极简确认，不带订单号/路径/链接；同一 task_id 幂等，只 @ 一次。
+    2026-11-16 20:08 新口径：已生成任务的数据不再 @ 相关人，通知简洁。
+    默认 `group_task.notify_on_complete=false`，本函数直接 skipped、不再群内 @ 任何人。
+    保留本函数仅为兼容旧配置（设 true 可恢复）；同一 task_id 幂等，只 @ 一次。
     """
     gt = cfg.get("group_task", {})
     # 2026-11-16 20:08 新口径默认不再 @：已生成任务的数据不再艾特相关人。
@@ -221,7 +222,7 @@ def _notify_completion(cfg, driver, count, amount, task_id, dry_run=False):
 
 
 def cmd_check(args, cfg):
-    """轮询台账中 task_status='pending' 的任务；完成的批次标记已报销并群内 @报销人。"""
+    """轮询台账中 task_status='pending' 的任务；完成的批次标记已报销（默认不再群内 @）。"""
     code, pending, _ = run_cli([sys.executable, LEDGER, "unreimbursed"])
     if not pending or not pending.get("ok"):
         return {"ok": False, "error": "读取台账失败", "raw": pending}
@@ -299,7 +300,7 @@ def main():
     c.add_argument("--window-days", type=int, help="统计窗口天数，用于描述")
     c.add_argument("--dry-run", action="store_true")
     ck = sub.add_parser("check")
-    ck.add_argument("--no-notify", action="store_true", help="轮询完成状态但不在群内 @报销人")
+    ck.add_argument("--no-notify", action="store_true", help="轮询完成状态但不在群内 @（默认已不 @，此参数保留兼容）")
     ck.add_argument("--dry-run", action="store_true", help="只生成 @ 文案，不真发")
     sub.add_parser("pending")
     args = p.parse_args()
