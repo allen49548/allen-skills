@@ -172,14 +172,27 @@ def _footer(d, cfg, lines, issue):
 
 
 def render_group(d, cfg=None):
-    """唯一司机通道：物流部群一份总览，只列实际有凭证的司机，只写金额和日期。
+    """唯一司机通道：物流部群一份总览，只列实际有凭证的司机。
+
+    2026-11-17 00:13 用户定案（第三次收敛，最终口径）：
+      群里只保留三样东西——① 本次报销（司机 / 金额 / 日期）
+                            ② 确认任务链接（逐笔贴在对应报销下面，不 @ 任何人）
+                            ③ 一句提醒开车注意安全的话
+      「统计：窗口｜打款截止」那一行、合计、以及「谁可看谁可编辑」等权限说明全部去掉。
+      司机很忙，扫一眼就知道自己这笔报了多少、点链接能看任务，剩下的只有安全提醒。
 
     不再输出「没列到名字的…」零值提示——司机是弹性的，没发图就不必出现在通报里。
     """
     cfg = cfg or load_config()
+    rcfg = cfg.get("reporting") or {}
     lines = _header(d, cfg, d.get("group_name") or rc_get(cfg, "default_group_name", "物流部"))
     label = d.get("scope_label") or "本次报销"
     rows = [r for r in (d.get("rows") or []) if float(r.get("amount") or 0) > 0]
+    show_task = rcfg.get("show_task_at_in_group") is True
+    show_total = rcfg.get("show_total_in_group", False) is True
+    mention = rcfg.get("group_task_mention", False) is True
+    link_prefix = rcfg.get("group_task_link_prefix") or "任务"
+    linked = False
     if rows:
         lines.append("%s：" % label)
         for r in rows:
@@ -187,22 +200,31 @@ def render_group(d, cfg=None):
             ds = fmt_dates(r.get("dates"), cfg=cfg)
             lines.append("· %s %s%s" % (r.get("driver"), amt,
                                         "（%s）" % ds if ds else ""))
-        lines.append("合计 %s" % fmt_amount(sum(float(r.get("amount") or 0)
-                                              for r in rows), cfg))
+            # 逐笔贴链接：金额与任务在同一屏，不用来回找
+            url = r.get("url") or ""
+            if show_task and url:
+                lines.append("　%s：%s" % (link_prefix, url))
+                linked = True
+        if show_total:
+            lines.append("合计 %s" % fmt_amount(sum(float(r.get("amount") or 0)
+                                                  for r in rows), cfg))
     else:
         lines.append(d.get("no_change_wording")
                      or dm_cfg(cfg).get("no_change_wording")
                      or rc_get(cfg, "no_change_wording", "暂无新报销"))
-    # 2026-11-16 20:08 用户新口径：已生成任务的数据不再 @ 报销人，群内通知精简单纯。
-    # 默认不在群里 @ 任何人、不贴任务链接、不写「谁可看谁可编辑」等权限说明——
-    # 司机很忙没时间看，只需在有新数据时看到一条简洁金额通报。
-    # 如需恢复旧行为，把 config.reporting.show_task_at_in_group 设为 true（默认 false）。
-    if cfg and (cfg.get("reporting") or {}).get("show_task_at_in_group") is True:
+    # 行里没带 url（旧调用只传 tasks）时兜底：按 tasks 列链接；默认不 @ 任何人。
+    if show_task and not linked:
         for t in (d.get("tasks") or []):
+            url = t.get("url") or ""
+            if not url:
+                continue
             name = t.get("driver") or ""
             open_id = t.get("open_id") or ""
-            at = ('<at user_id="%s">%s</at>' % (open_id, name)) if open_id else ("@" + name)
-            lines.append("%s 报销确认任务：%s" % (at, t.get("url") or ""))
+            if mention and name:
+                who = ('<at user_id="%s">%s</at>' % (open_id, name)) if open_id else ("@" + name)
+                lines.append("%s %s：%s" % (who, link_prefix, url))
+            else:
+                lines.append("%s：%s" % (link_prefix, url))
     return _footer(d, cfg, lines, d.get("issues"))
 
 
