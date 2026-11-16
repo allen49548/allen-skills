@@ -316,7 +316,9 @@
     "show_task_at_in_group_note": "2026-11-16 20:08：群内不再@报销人/贴任务/写权限说明；设true恢复旧行为。",
     "no_new_data_policy": "group_brief_only",
     "no_new_data_wording": "暂无新报销",
-    "no_new_data_note": "2026-11-16 20:08：无新报销时群里一句「暂无新报销」（notify.py --no-new），不发私聊长文。"
+    "no_new_data_note": "2026-11-16 20:08：无新报销时群里一句「暂无新报销」（notify.py --no-new），不发私聊长文。",
+    "notify_duplicates": false,
+    "notify_duplicates_note": "2026-11-16 20:21：重复提交（旧凭证）不再进任何通报，只进运行清单；有重复但无新入账也按「暂无新报销」走 --no-new。设true恢复旧的重复提交透明通报。"
   },
   "task_permissions": {
     "assignee_role": "editor",
@@ -576,6 +578,8 @@
   },
   "owner_message": {
     "show_task_permission": false,
-    "show_task_permission_note": "2026-11-16 20:08：通知简洁，不写谁可看谁可编辑。"
+    "show_task_permission_note": "2026-11-16 20:08：通知简洁，不写谁可看谁可编辑。",
+    "show_duplicate_detail": false,
+    "show_duplicate_detail_note": "2026-11-16 20:21：负责人私聊不逐笔列重复提交（旧凭证），只一行汇总；逐项只进运行清单。设true恢复逐项透明。"
   }
 }

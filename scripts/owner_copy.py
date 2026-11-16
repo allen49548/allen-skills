@@ -90,31 +90,34 @@ def render(d, cfg=None):
     if dups:
         td = sum(float(x.get("amount") or 0) for x in dups)
         td_count = sum(int(x.get("count") or 0) for x in dups)
-        a("⚠️ 重复提交·未重复计算 %d 笔 %s（本次未加钱）" % (td_count, money(td)))
-        for x in dups:
-            a("· %s：%s 命中，%d 笔 %s，原登记均 %s，当前全部「%s」" % (
-                x.get("driver"), x.get("layer") or "四层", int(x.get("count") or 0),
-                money(x.get("amount")), x.get("created_at") or "-", x.get("status") or "待报销"))
-            items = x.get("items") or []
-            if items:
-                # 逐项金额 + 订单号尾号：铁律要求逐项可核，但压成紧凑行，不再一行一笔带长链接
-                parts = []
-                for it in items:
-                    tail = it.get("tail") or ""
-                    parts.append("%s(%s)" % (money(it.get("amount")), tail) if tail
-                                 else money(it.get("amount")))
-                # 按「项」边界折行，绝不把单个金额或订单号尾号截断到两行
-                cur = ""
-                for item in parts:
-                    if cur and len(cur) + 1 + len(item) > 200:
+        # 2026-11-16 20:21 用户新口径：重复提交的旧凭证不再逐笔推送，只一行极简汇总。
+        # 逐项明细（金额/订单号/原登记时间/任务链接）只进运行清单 state/runs/*.md 供审计。
+        a("⚠️ 重复提交·未重复计算 %d 笔 %s（本次未加钱，逐项详见运行清单）" % (td_count, money(td)))
+        if (cfg or {}).get("owner_message", {}).get("show_duplicate_detail") is True:
+            for x in dups:
+                a("· %s：%s 命中，%d 笔 %s，原登记均 %s，当前全部「%s」" % (
+                    x.get("driver"), x.get("layer") or "四层", int(x.get("count") or 0),
+                    money(x.get("amount")), x.get("created_at") or "-", x.get("status") or "待报销"))
+                items = x.get("items") or []
+                if items:
+                    # 逐项金额 + 订单号尾号：铁律要求逐项可核，但压成紧凑行，不再一行一笔带长链接
+                    parts = []
+                    for it in items:
+                        tail = it.get("tail") or ""
+                        parts.append("%s(%s)" % (money(it.get("amount")), tail) if tail
+                                     else money(it.get("amount")))
+                    # 按「项」边界折行，绝不把单个金额或订单号尾号截断到两行
+                    cur = ""
+                    for item in parts:
+                        if cur and len(cur) + 1 + len(item) > 200:
+                            a("  " + cur)
+                            cur = item
+                        else:
+                            cur = (cur + " " + item) if cur else item
+                    if cur:
                         a("  " + cur)
-                        cur = item
-                    else:
-                        cur = (cur + " " + item) if cur else item
-                if cur:
-                    a("  " + cur)
-            if x.get("task_url"):
-                a("  对应任务 %s" % x["task_url"])
+                if x.get("task_url"):
+                    a("  对应任务 %s" % x["task_url"])
         a("")
 
     if d.get("exceptions") or d.get("manual"):
