@@ -151,6 +151,11 @@
     "due_days": 3,
     "batching": "driver_per_run",
     "note": "每轮同步为每位司机的新入账条目建一个飞书任务（混合群下按 driver 分组，不再按群分组），负责人真实报销后点完成；check 命令轮询完成状态并标记已报销",
+    "mandatory": true,
+    "mandatory_note": "不论是司机还是负责人要求报销，每一次报销都必须对应一个飞书确认任务，否则无法判断是否真实报销。没有任务=本轮报销未闭环，必须补建。",
+    "tasklist_guid": "REPLACE_WITH_REIMBURSEMENT_TASKLIST_GUID",
+    "tasklist_name": "报销",
+    "tasklist_note": "任务必须挂进「报销」清单：tasklists 为空时在飞书默认视图里找不到任务。建任务后自动 task +tasklist-task-add。",
     "notify_on_complete": false,
     "completion_notice_note": "2026-11-16 20:08：已生成任务的数据不再@相关人，默认不再群内@报销人。"
   },

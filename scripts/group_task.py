@@ -60,6 +60,23 @@ def _add_driver_viewer(task_id, driver_open_id, as_identity="user"):
     return {"ok": code == 0, "code": code, "data": data, "error": err}
 
 
+def _add_to_tasklist(task_id, tasklist_guid, as_identity="user"):
+    """把任务挂进指定飞书任务清单（默认「报销」）。
+    2026-11-16 22:50 用户口径：每轮报销都必须有一个任务、且要能在清单里看到，
+    否则无法确认是否真实报销。任务不归清单时在飞书默认视图里翻不到。"""
+    if not task_id or not tasklist_guid:
+        return None
+    cmd = [
+        "lark-cli", "task", "+tasklist-task-add", "--as", as_identity,
+        "--tasklist-id", str(tasklist_guid),
+        "--task-id", str(task_id),
+        "--format", "json",
+    ]
+    code, data, err = run_cli(cmd)
+    return {"ok": code == 0, "code": code, "tasklist_id": tasklist_guid,
+            "data": data, "error": err}
+
+
 def cmd_create(args, cfg):
     gt = cfg.get("group_task", {})
     assignee = args.assignee or gt.get("assignee_open_id") or cfg.get("owner_open_id")
@@ -142,6 +159,14 @@ def cmd_create(args, cfg):
     elif not driver_open_id:
         result["driver_viewer"] = {"ok": False, "skipped": True,
                                    "reason": "缺少司机 open_id（config.driver_open_ids[%s] / driver_roster.members 均为空；司机需先进入「物流部」群并跑 driver_roster.py sync，或直接提供 open_id）" % args.driver}
+
+    # 任务必须归进「报销」清单，否则用户在飞书默认视图里找不到（无法确认是否真实报销）
+    tasklist_guid = args.tasklist_id or gt.get("tasklist_guid")
+    if tasklist_guid and task_id and not args.dry_run:
+        result["tasklist"] = _add_to_tasklist(task_id, tasklist_guid)
+    elif not tasklist_guid:
+        result["tasklist"] = {"ok": False, "skipped": True,
+                              "reason": "缺少 config.group_task.tasklist_guid，任务不会归清单"}
     return result
 
 
@@ -298,6 +323,7 @@ def main():
     c.add_argument("--window-start", help="统计窗口起始时间（ISO），写入任务描述")
     c.add_argument("--window-end", help="统计窗口截止时间=本次运行时间（ISO），写入任务描述")
     c.add_argument("--window-days", type=int, help="统计窗口天数，用于描述")
+    c.add_argument("--tasklist-id", help="飞书任务清单 guid，默认取 config.group_task.tasklist_guid（报销清单）")
     c.add_argument("--dry-run", action="store_true")
     ck = sub.add_parser("check")
     ck.add_argument("--no-notify", action="store_true", help="轮询完成状态但不在群内 @（默认已不 @，此参数保留兼容）")
