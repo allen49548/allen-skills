@@ -72,10 +72,16 @@ _DEFAULT_DATE_COL = 0             # A 列 = 日期
 _DEFAULT_ORDER_COL = 1            # B 列 = 订单号
 _DEFAULT_TYPE_COL = 2             # C 列 = 类型
 _DEFAULT_SHEET_NAME = "报销明细"
+# 2026-11-16 18:55 用户新口径：sheet 名统一「11月报销明细」；旧名识别后重命名不新建。
+_DEFAULT_STYLE = {"font_name": "苹方-简", "font_size": 12,
+                  "horizontal": "center", "vertical": "center"}
+_DEFAULT_LEGACY_NAMES = ["报销明细"]
 _DEFAULT_NO_MONTH = "未标月份"
 _DEFAULT_DATE_PRIORITY = ("receipt_date", "pay_time", "message_time", "created_at")
 # 兼容旧代码/外部 import：默认常量仍存在，值为原硬编码
 SHEET_NAME = _DEFAULT_SHEET_NAME
+STYLE = dict(_DEFAULT_STYLE)              # 单元格样式（字体/字号/对齐）
+LEGACY_SHEET_NAMES = list(_DEFAULT_LEGACY_NAMES)  # 迁移时识别的旧 sheet 名
 HEADERS = _DEFAULT_HEADERS
 WIDTHS = _DEFAULT_WIDTHS
 HIDDEN_COLS = _DEFAULT_HIDDEN
@@ -124,6 +130,9 @@ def _layout(cfg):
         "undated_group": rc_get(cfg, "undated_group", _DEFAULT_NO_MONTH),
         "month_label": cols.get("month_label") or "YYYY年M月（共 N 笔 ¥X）",
         "skip_keys": {"", (headers[-1] if headers else "唯一键"), "合计"},
+        # 2026-11-16：样式与旧 sheet 名迁移列表
+        "style": {**_DEFAULT_STYLE, **(rds.get("style") or {})},
+        "legacy_sheet_names": list(rds.get("legacy_sheet_names") or _DEFAULT_LEGACY_NAMES),
     }
 
 
@@ -136,6 +145,7 @@ def apply_layout_config(cfg):
     """
     global SHEET_NAME, HEADERS, WIDTHS, HIDDEN_COLS, AMOUNT_COL, KEY_COL
     global DATE_COL, ORDER_COL, TYPE_COL, SKIP_KEYS, NO_MONTH, _DATE_PRIORITY
+    global STYLE, LEGACY_SHEET_NAMES
     lay = _layout(cfg)
     SHEET_NAME = lay["sheet_name"]
     HEADERS = lay["headers"]
@@ -149,6 +159,8 @@ def apply_layout_config(cfg):
     SKIP_KEYS = lay["skip_keys"]
     NO_MONTH = lay["undated_group"]
     _DATE_PRIORITY = lay["date_priority"]
+    STYLE = lay["style"]
+    LEGACY_SHEET_NAMES = lay["legacy_sheet_names"]
 
 
 def col_letter(i):
@@ -160,29 +172,34 @@ def col_letter(i):
     return s
 
 
-def cell_str(ref, value):
-    return '<c r="%s" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>' % (
-        ref, xml_escape("" if value is None else str(value)))
+def _style_attr(style_id):
+    """2026-11-16：单元格样式索引属性（居中/苹方-简/12）。"""
+    return ' s="%d"' % style_id if isinstance(style_id, int) else ""
 
 
-def cell_num(ref, value):
+def cell_str(ref, value, style_id=None):
+    return '<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>' % (
+        ref, _style_attr(style_id), xml_escape("" if value is None else str(value)))
+
+
+def cell_num(ref, value, style_id=None):
     try:
         v = float(value)
     except (TypeError, ValueError):
-        return cell_str(ref, value)
+        return cell_str(ref, value, style_id)
     # 避免科学计数法与浮点尾巴
     s = ("%.2f" % v).rstrip("0").rstrip(".") if v != int(v) else str(int(v))
-    return '<c r="%s"><v>%s</v></c>' % (ref, s or "0")
+    return '<c r="%s"%s><v>%s</v></c>' % (ref, _style_attr(style_id), s or "0")
 
 
-def row_xml(r, values, amount_col=AMOUNT_COL):
+def row_xml(r, values, amount_col=AMOUNT_COL, style_id=None):
     cells = []
     for i, v in enumerate(values):
         ref = "%s%d" % (col_letter(i), r)
         if i == amount_col and isinstance(v, (int, float)):
-            cells.append(cell_num(ref, v))
+            cells.append(cell_num(ref, v, style_id))
         else:
-            cells.append(cell_str(ref, v))
+            cells.append(cell_str(ref, v, style_id))
     return '<row r="%d">%s</row>' % (r, "".join(cells))
 
 
@@ -242,7 +259,7 @@ def build_display_rows(records, lay=None):
     return out
 
 
-def sheet_xml(rows, lay=None):
+def sheet_xml(rows, lay=None, style_id=None):
     """rows: list of (row_number, values)。E 列隐藏，只展示 4 个核心字段。"""
     lay = lay or {}
     headers = lay.get("headers", HEADERS)
@@ -257,7 +274,8 @@ def sheet_xml(rows, lay=None):
             col_defs.append('<col min="%d" max="%d" width="%d" customWidth="1"/>'
                             % (i + 1, i + 1, w))
     cols = "".join(col_defs)
-    body = "".join(row_xml(r, v) for r, v in rows)
+    body = "".join(row_xml(r, v, amount_col=lay.get("amount_col", AMOUNT_COL),
+                           style_id=style_id) for r, v in rows)
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
             '<worksheet xmlns="%s"><dimension ref="A1:%s%d"/>'
             '<sheetViews><sheetView workbookViewId="0">'
@@ -288,12 +306,23 @@ def read_parts(path):
 
 
 def find_detail_sheet(parts):
-    """返回 (sheet_xml_part_name, rel_id) 或 (None, None)"""
+    """返回 (sheet_xml_part_name, rel_id) 或 (None, None)。
+
+    2026-11-16：sheet 名由「报销明细」统一为「11月报销明细」。为兼容历史报表，
+    按 SHEET_NAME（新名）→ LEGACY_SHEET_NAMES（旧名）顺序查找；命中旧名时同样返回，
+    apply_one 会就地重命名该 sheet（不新建、不丢数据）。
+    """
     wb = next((d.decode("utf-8") for i, d in parts if i.filename == "xl/workbook.xml"), "")
-    m = re.search(r'<sheet[^>]*name="%s"[^>]*/>' % re.escape(SHEET_NAME), wb)
-    if not m:
+    names = [SHEET_NAME] + [n for n in LEGACY_SHEET_NAMES if n != SHEET_NAME]
+    tag = None
+    for nm in names:
+        m = re.search(r'<sheet[^>]*name="%s"[^>]*/>' % re.escape(nm), wb)
+        if m:
+            tag = m.group(0)
+            break
+    if not tag:
         return None, None
-    rid = re.search(r'r:id="([^"]+)"', m.group(0))
+    rid = re.search(r'r:id="([^"]+)"', tag)
     rels = next((d.decode("utf-8") for i, d in parts
                  if i.filename == "xl/_rels/workbook.xml.rels"), "")
     if not rid:
@@ -455,6 +484,140 @@ def patch_app_xml(app):
     return app
 
 
+def _attr(tag, name):
+    m = re.search(r'\b%s="([^"]*)"' % re.escape(name), tag)
+    return m.group(1) if m else None
+
+
+def actual_sheet_name(parts, detail_part):
+    """由 detail worksheet 部件反查其在 workbook.xml 中的当前显示名。"""
+    wb = next((d.decode("utf-8") for i, d in parts if i.filename == "xl/workbook.xml"), "")
+    rels = next((d.decode("utf-8") for i, d in parts
+                 if i.filename == "xl/_rels/workbook.xml.rels"), "")
+    suffix = detail_part[len("xl/"):] if detail_part.startswith("xl/") else detail_part
+    for rel in re.finditer(r'<Relationship\b[^>]*/>', rels):
+        tag = rel.group(0)
+        target = _attr(tag, "Target") or ""
+        norm = ("xl/" + target.lstrip("/")) if not target.startswith("/") else target.lstrip("/")
+        if norm == detail_part or norm.endswith("/" + suffix) or target == suffix:
+            rid = _attr(tag, "Id")
+            if not rid:
+                continue
+            sm = re.search(r'<sheet\b[^>]*r:id="%s"[^>]*/>' % re.escape(rid), wb)
+            if sm:
+                return _attr(sm.group(0), "name")
+    return None
+
+
+def rename_sheet_in_workbook(wb, old, new):
+    """就地改 workbook.xml 中某 sheet 的 name（只改 name 属性，其余不动）。"""
+    m = re.search(r'<sheet\b[^>]*name="%s"[^>]*/>' % re.escape(old), wb)
+    if not m:
+        return wb
+    tag = re.sub(r'name="%s"' % re.escape(old), 'name="%s"' % new, m.group(0), count=1)
+    return wb[:m.start()] + tag + wb[m.end():]
+
+
+def rename_sheet_in_app(app, old, new):
+    """同步 docProps/app.xml 的 TitlesOfParts 中旧 sheet 名。"""
+    if not app or not old:
+        return app
+    token = "<vt:lpstr>%s</vt:lpstr>" % old
+    if token in app:
+        return app.replace(token, "<vt:lpstr>%s</vt:lpstr>" % new)
+    return app
+
+
+def _xf_open_count(body):
+    """cellXfs 内 <xf 开标签数 = Excel 真实样式索引上限（WPS 的 count 属性常偏小）。"""
+    return len(re.findall(r'<xf\b', body))
+
+
+def ensure_style(parts, style=None):
+    """在 styles.xml 里幂等追加「苹方-简/12/居中」的 font+cellXf。
+
+    返回 (new_styles_bytes_or_None, style_index)；已存在则复用索引、返回 None 不改字节
+    （保证重复 apply 时 styles.xml 零差异，verify 通过）。styles.xml 缺失则跳过样式。
+    索引一律按「开标签顺序」计算：WPS 生成的 count 属性可能与实际标签数不一致，
+    若用 count 会导致 s= 指向错误样式（曾致居中/字体失效）。
+    """
+    st = style or STYLE
+    font_name = str(st.get("font_name") or "苹方-简")
+    try:
+        font_size = float(st.get("font_size") or 12)
+    except (TypeError, ValueError):
+        font_size = 12.0
+    halign = str(st.get("horizontal") or "center")
+    valign = str(st.get("vertical") or "center")
+
+    idx = next((i for i, (info, d) in enumerate(parts)
+                if info.filename == "xl/styles.xml"), None)
+    if idx is None:
+        return None, None
+    _, data = parts[idx]
+    text = data.decode("utf-8")
+    changed = False
+
+    # —— fonts ——（索引 = <font 开标签顺序）
+    fm = re.search(r'(<fonts\b[^>]*count=")(\d+)("[^>]*>)(.*?)(</fonts>)', text, re.S)
+    if not fm:
+        return None, None
+    font_body = fm.group(4)
+    font_tags = re.findall(r'<font\b[^>]*(?:/>|>.*?</font>)', font_body, re.S)
+    font_idx = None
+    for k, tag in enumerate(font_tags):
+        nm = re.search(r'<name\b[^>]*val="([^"]*)"', tag)
+        sz = re.search(r'<sz\b[^>]*val="([^"]*)"', tag)
+        if nm and sz and nm.group(1) == font_name:
+            try:
+                if abs(float(sz.group(1)) - font_size) < 0.01:
+                    font_idx = k
+                    break
+            except (TypeError, ValueError):
+                pass
+    if font_idx is None:
+        font_idx = len(re.findall(r'<font\b', font_body))  # 真实索引
+        size_txt = ("%g" % font_size)
+        new_font = ('<font><sz val="%s"/><color theme="1"/><name val="%s"/>'
+                    '<charset val="134"/></font>') % (size_txt, xml_escape(font_name))
+        real_count = len(re.findall(r'<font\b', font_body)) + 1
+        new_fonts = ('<fonts count="%d">' % real_count) + font_body + new_font + "</fonts>"
+        text = text[:fm.start()] + new_fonts + text[fm.end():]
+        changed = True
+
+    # —— cellXfs ——（索引 = <xf 开标签顺序）
+    fm2 = re.search(r'(<cellXfs\b[^>]*count=")(\d+)("[^>]*>)(.*?)(</cellXfs>)', text, re.S)
+    if not fm2:
+        return (text.encode("utf-8") if changed else None), None
+    xf_body = fm2.group(4)
+    xf_tags = re.findall(r'<xf\b[^>]*(?:/>|>.*?</xf>)', xf_body, re.S)
+    xf_idx = None
+    for k, tag in enumerate(xf_tags):
+        fid = _attr(tag, "fontId")
+        if fid is None or fid != str(font_idx):
+            continue
+        hal = re.search(r'\bhorizontal="([^"]*)"', tag)
+        val = re.search(r'\bvertical="([^"]*)"', tag)
+        def _ok(m, want):
+            return (m and m.group(1) == want) or (not m and ('%s="%s"' % (
+                "horizontal" if want == halign else "vertical", want)) in tag)
+        if _ok(hal, halign) and _ok(val, valign):
+            xf_idx = k
+            break
+    if xf_idx is None:
+        xf_idx = len(re.findall(r'<xf\b', xf_body))  # 真实索引
+        new_xf = ('<xf numFmtId="0" fontId="%d" fillId="0" borderId="0" xfId="0" '
+                  'applyFont="1" applyAlignment="1"><alignment horizontal="%s" '
+                  'vertical="%s"/></xf>') % (font_idx, halign, valign)
+        real_count = len(re.findall(r'<xf\b', xf_body)) + 1
+        new_cellxfs = ('<cellXfs count="%d">' % real_count) + xf_body + new_xf + "</cellXfs>"
+        text = text[:fm2.start()] + new_cellxfs + text[fm2.end():]
+        changed = True
+
+    return (text.encode("utf-8") if changed else None), xf_idx
+
+
+
 def write_zip(path, parts, replacements, additions):
     tmp = path + ".tmp_reimb"
     with zipfile.ZipFile(tmp, "w") as zout:
@@ -523,6 +686,7 @@ def apply_one(path, entries, backup_dir, lay=None):
     replacements = {}
     additions = {}
     changed = set()
+    renamed_from = None
 
     if created:
         sheet_id, rid, detail_part = next_ids(parts)
@@ -539,6 +703,25 @@ def apply_one(path, entries, backup_dir, lay=None):
     else:
         existing, layout, _ = parse_existing_records(before[detail_part].decode("utf-8"), shared)
         changed.add(detail_part)
+        # 2026-11-16：旧名「报销明细」→ 新名「11月报销明细」，就地重命名（不新建、不丢数据）
+        actual = actual_sheet_name(parts, detail_part)
+        renamed_from = None
+        if actual and actual != sheet_name:
+            renamed_from = actual
+            if "xl/workbook.xml" in before:
+                replacements["xl/workbook.xml"] = rename_sheet_in_workbook(
+                    before["xl/workbook.xml"].decode("utf-8"), actual, sheet_name).encode("utf-8")
+                changed.add("xl/workbook.xml")
+            if "docProps/app.xml" in before:
+                replacements["docProps/app.xml"] = rename_sheet_in_app(
+                    before["docProps/app.xml"].decode("utf-8"), actual, sheet_name).encode("utf-8")
+                changed.add("docProps/app.xml")
+
+    # 2026-11-16：样式（居中/苹方-简/12），幂等注入 styles.xml
+    styles_patch, style_id = ensure_style(parts, lay.get("style"))
+    if styles_patch is not None:
+        replacements["xl/styles.xml"] = styles_patch
+        changed.add("xl/styles.xml")
 
     # 幂等：已有唯一键不再追加
     seen = {x["key"] for x in existing}
@@ -558,7 +741,7 @@ def apply_one(path, entries, backup_dir, lay=None):
 
     values = [HEADERS] + display + [total_row(amount_sum)]
     rows = [(i + 1, v) for i, v in enumerate(values)]
-    sheet = sheet_xml(rows)
+    sheet = sheet_xml(rows, lay=lay, style_id=style_id)
     if created:
         additions[detail_part] = sheet.encode("utf-8")
     else:
@@ -584,6 +767,8 @@ def apply_one(path, entries, backup_dir, lay=None):
         "total_rows": expect_rows, "total_amount": amount_sum,
         "month_sections": sum(1 for x in display if x[1] == "" and x[2] == ""
                               and x[3] == "" and x[4] == ""),
+        "renamed_from": renamed_from, "sheet_name": sheet_name,
+        "style_index": style_id, "style": lay.get("style"),
         "backup": backup, "verify": v,
     }, (None if v["ok"] else "回读校验失败，已回滚：%s" % json.dumps(v, ensure_ascii=False)[:400])
 

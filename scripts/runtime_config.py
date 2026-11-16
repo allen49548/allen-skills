@@ -21,7 +21,7 @@ DEFAULT = {
     "default_year": 0,                  # 0 = 取当前系统年份（替代写死的 2026）
     "unknown_driver": "未识别司机",
     "default_group_name": "物流部",
-    "sheet_name": "报销明细",
+    "sheet_name": "11月报销明细",       # 2026-11-16 统一报表名（原「报销明细」），旧名自动迁移
     "run_log_window_days": 14,          # owner_copy 文案里的「窗口 N 天」
     "phash_lookback_days": 90,          # ledger L3 感知哈希回溯天数
     "no_change_line_override": None,    # 群内无新增文案；None=用 driver_message.no_change_wording

@@ -501,7 +501,7 @@
     "default_year": 0,
     "unknown_driver": "未识别司机",
     "default_group_name": "物流部",
-    "sheet_name": "报销明细",
+    "sheet_name": "11月报销明细",
     "run_log_window_days": 14,
     "phash_lookback_days": 90,
     "no_change_line_override": null,
@@ -550,5 +550,20 @@
       "口径"
     ],
     "locator_right_offset": 3
+  },
+  "report_detail_sheet": {
+    "sheet_name": "11月报销明细",
+    "legacy_sheet_names": [
+      "报销明细"
+    ],
+    "style": {
+      "font_name": "苹方-简",
+      "font_size": 12,
+      "horizontal": "center",
+      "vertical": "center",
+      "adopted_at": "2026-11-16 18:55",
+      "note": "用户 2026-11-16 要求：报表内文字全部居中对齐、字体『苹方-简』、字号 12。由 reimb_detail.py 写入时在 styles.xml 追加 font+居中 cellXf，明细 sheet 每个单元格带该样式索引。"
+    },
+    "note": " 2026-11-16 18:55 用户新口径：sheet 名统一改为『11月报销明细』（原『报销明细』，旧名识别后重命名不新建），文字全部居中、字体苹方-简、字号12。"
   }
 }

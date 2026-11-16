@@ -72,7 +72,7 @@ def cmd_create(args, cfg):
         args.driver, args.entry_count or 0, amount, due)
     assignee_name = gt.get("assignee_name") or "负责人"
     # 2026-11-14 23:53 用户新口径：「任务内容也要精简」。
-    # 逐笔明细统一放报表「报销明细」sheet 与运行清单，任务里不再重复铺开。
+    # 逐笔明细统一放报表「11月报销明细」sheet 与运行清单，任务里不再重复铺开。
     # --detail-file 保留兼容但不再注入描述（避免任务又被撑成长文）。
     window = "%s ~ %s" % ((args.window_start or "")[:16], (args.window_end or "")[:16]) \
         if (args.window_start and args.window_end) else "-"
@@ -80,7 +80,7 @@ def cmd_create(args, cfg):
         "%s 本批次 %d 笔 %s｜统计窗口（截止）%s" % (
             args.driver, args.entry_count or 0, amount, window),
         "报销确认截止：%s（负责人 %s 打款后点完成；请勿重复打款）" % (due, assignee_name),
-        "逐笔明细：报表「报销明细」sheet / 运行清单。",
+        "逐笔明细：报表「11月报销明细」sheet / 运行清单。",
         "权限：负责人可编辑；报销人仅查看与评论，不能点完成。",
     ]
     desc_max = int(gt.get("description_max_chars")

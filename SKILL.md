@@ -26,6 +26,11 @@ agent_created: true
 - **审计字段不丢**：商户、凭证文件名、消息时间、台账ID、任务链接、备注仍完整保存在 `state/ledger.sqlite` 与 `state/runs/<run>.md` 运行清单；台账 28 个字段一个不减，负责人私聊与月报照常精简。
 - `apply` 自动识别旧 13 列布局并整表迁移（先备份 + 回读校验 + 失败回滚，无需单独迁移命令）；同时兼容 WPS 保存后生成的 `sharedStrings` 单元格——**旧脚本只读 inlineStr，读不出幂等键，重跑会重复追加行**，本轮已修复。
 
+**2026-11-16 18:55 用户新口径：报表改名 + 统一样式（本轮起生效，之前铁律全部保留）**：
+- **报表名统一「月份+报销明细」**：明细 sheet 名由「报销明细」改为「**11月报销明细**」（`config.report_detail_sheet.sheet_name` 与 `runtime.sheet_name`）。`reimb_detail.py` 的 `find_detail_sheet` 按「新名 → `legacy_sheet_names`（旧名「报销明细」）」顺序识别；命中旧名时**就地重命名**（同步改 `workbook.xml` 与 `docProps/app.xml` 的 TitlesOfParts），**不新建、不丢数据**。2026-11-16 已把 8 个司机报表一次性迁移完成。
+- **样式统一**：明细 sheet 全部单元格文字 = **居中（水平+垂直）+ 字体「苹方-简」+ 字号 12**。`ensure_style()` 在 `xl/styles.xml` **幂等**追加 font+cellXf（存在则复用，索引按 `<xf`/`<font` 开标签顺序算——WPS 的 `count` 属性常偏小，用 count 会指错样式），`sheet_xml()` 给每个 `<c>` 带 `s=` 索引。样式写在明细 sheet，不动其他月份/工资 sheet。
+- 历史文档里出现的「报销明细」多为原话/历史口径描述（保留审计价值），**当前生效名一律以 config 的 `sheet_name` = 「11月报销明细」为准**。
+
 **报销费用最忌讳重复计算：相同金额不是重复，以订单号+支付时间为唯一性依据；司机今天发的报销若负责人尚未完成、第二天又重发同样的凭证，必须识别为重复提交并跳过，且在通报里注明『原登记时间 + 该笔当前是否已报销』，让负责人与报销人都看得懂为什么没加钱。**
 
 **按司机分类统计（2026-11-14 用户新要求）**：所有司机共用一个群，每笔费用都挂到具体司机名下；日常通报和月度统计**都按司机单独列出各自的金额**，不做「群=司机」的隐含假设。用户同时明确「**司机报销不需要保密**」，金额可在群内按司机公开列出。
@@ -175,7 +180,7 @@ agent_created: true
    **重复命中必须透明**：`check` 返回 `original_created_at`、`original_status`、`original_amount` 等字段。一旦命中重复，在清单与通报的「⚠️ 重复提交·未重复计算」段落**按司机分节**逐项列出：金额、原登记时间、当前状态（待报销/已报销）、对应任务链接——**绝不允许静默跳过**。
    **重发场景**：司机某天发的凭证、负责人还没点完成报销，隔几天又发同一张 → 命中 L2/L3/L4 任一层，判重复跳过；通报注明原登记时间与该笔是否已报销，明确「本次未加钱」。
 6. 按小票日期确定年月（跨月按小票月份，不按运行月份），定位 `{报表根}/{年份}年/司机工资/{司机}{年份}.xlsx`。**不再定位原表里位置不一的「报销 / 报销支出」汇总单元格**（2026-11-14 23:53 用户新口径：统一建「报销明细」解决兼容问题）。`locate_report.py` 仍可只读用于审计，但其「报销项歧义 / 公式单元格 / 无有效数值」结果**不再阻断入账**。
-7. **写入统一「报销明细」sheet**（用户授权的唯一建 sheet 例外）：调 `scripts/reimb_detail.py apply --data <data.json>`，给该年份下**所有**司机报表预建 / 复用唯一一个「报销明细」sheet，并把本轮入账条目按司机追加成逐笔明细行。实现用 **zip 层精确插入**：只改 `xl/workbook.xml`、`xl/_rels/workbook.xml.rels`、`[Content_Types].xml`、`docProps/app.xml` 并新增 1 个 worksheet 部件，其余部件字节原样（WPS 文件含 customXml / tables / comments，绝不整体重写工作簿）；写前备份到 `state/backups/<运行ID>/`，写后回读校验（原有部件零差异 + openpyxl 可打开 + 明细行数与金额一致），失败自动回滚。幂等键 = `message_id`，重跑不会重复追加行。
+7. **写入统一明细 sheet**（现名「**11月报销明细**」，2026-11-16 起；历史名「报销明细」遇旧表自动就地重命名；用户授权的唯一建 sheet 例外）：调 `scripts/reimb_detail.py apply --data <data.json>`，给该年份下**所有**司机报表预建 / 复用唯一一个明细 sheet，并把本轮入账条目按司机追加成逐笔明细行；写入自动套用居中+苹方-简+12 号样式。实现用 **zip 层精确插入**：只改 `xl/workbook.xml`、`xl/_rels/workbook.xml.rels`、`[Content_Types].xml`、`docProps/app.xml` 并新增 1 个 worksheet 部件，其余部件字节原样（WPS 文件含 customXml / tables / comments，绝不整体重写工作簿）；写前备份到 `state/backups/<运行ID>/`，写后回读校验（原有部件零差异 + openpyxl 可打开 + 明细行数与金额一致），失败自动回滚。幂等键 = `message_id`，重跑不会重复追加行。
    - **有报表文件** → 写明细 sheet，台账登记 `no_report=0` + `report_file` / `sheet=报销明细`。
    - **无报表文件** → 仍 `record_without_write`：不写 xlsx、不备份、**绝不新建文件**，但照常登记台账（`no_report=1`、`report_file` 留空）+ 建确认任务 + 通报注明待指定报表。
    - 原有报销汇总单元格**不再写入**（`write_original_summary_cell=false`），避免同一笔在原表与明细 sheet 双记。
@@ -286,7 +291,7 @@ agent_created: true
 | `references/notification.md` | 两层通报模板（极简群总览 / 专业版）、弹性司机只列有图者、四态口径、调侃句、发送命令、身份降级链、防串群与「绝不发司机私聊」硬校验 |
 | `scripts/ledger.py` | 幂等台账（check / add / list / stats / **balance** / set-task / mark-reimbursed / unreimbursed / void），sqlite |
 | `scripts/locate_report.py` | 只读定位司机/月份/报销单元格，输出歧义（**仅供审计，不再阻断入账**） |
-| `scripts/reimb_detail.py` | **统一「报销明细」sheet 写入**：4 个可见列 + 隐藏幂等列、按月份分节、zip 层精确插入、备份、回读校验、失败回滚、按 message_id 幂等追加、旧 13 列/sharedStrings 布局自动迁移；`apply` / `inspect` |
+| `scripts/reimb_detail.py` | **统一明细 sheet 写入**（2026-11-16 起名「11月报销明细」）：4 个可见列 + 隐藏幂等列、按月份分节、zip 层精确插入、备份、回读校验、失败回滚、按 message_id 幂等追加、旧 13 列/sharedStrings 布局自动迁移、**sheet 名旧→新就地重命名（`legacy_sheet_names`）、单元格居中+苹方-简+12 幂等样式注入（`ensure_style`）**；`apply` / `inspect` |
 | `scripts/owner_copy.py` | **负责人私聊精简专业版渲染**（2026-11-14 23:53 用户要求精简），约 20 行、保留审计必需字段 |
 | `scripts/notify.py` | 白名单精确校验 + 两层飞书发送（群 / 负责人）+ 降级 + 幂等键；对 `--driver-dm-manifest` 硬拦截，绝不发司机私聊 |
 | `scripts/group_task.py` | 按司机分组的报销确认飞书任务（create / check / pending） |

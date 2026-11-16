@@ -7,7 +7,7 @@
 是否已报销+任务链接、异常与待办、确认任务链接、台账四态、清单/备份路径。
 删掉：冗长的口径说明、权限/统计/通报三行套话、29 笔逐笔图片文件名与商户、
 重复的完整任务链接、逐节「小计」、停用群说明等模板填充。
-逐笔图片级明细仍完整保存在 state/runs/<run>.md 与报表「报销明细」sheet。
+逐笔图片级明细仍完整保存在 state/runs/<run>.md 与报表「11月报销明细」sheet。
 
 用法：
   python3 scripts/owner_copy.py render --data <data.json> --out <owner.txt>
@@ -18,7 +18,7 @@ data.json 字段（全部可选，缺什么不写什么）：
   "window":"10-31 23:53 ~ 11-14 23:53", "due":"11-17",
   "new_entries":[{"driver":"王博成","count":32,"amount":1737.06,
                   "dates":["11-11","11-14"],"report_file":"王博成2026.xlsx",
-                  "sheet":"报销明细","rows":32,"backup":"state/backups/..."}],
+                  "sheet":"11月报销明细","rows":32,"backup":"state/backups/..."}],
   "duplicates":[{"driver":"贾燕斌","count":20,"amount":742.88,
                  "layer":"L1","status":"已报销","created_at":"11-14 21:35",
                  "task_url":"https://...","items":[{"amount":14.0,"tail":"582172"}]}],
@@ -79,7 +79,7 @@ def render(d, cfg=None):
             a("· %s %d 笔 %s%s → %s「%s」%s 行%s" % (
                 x.get("driver"), int(x.get("count") or 0), money(x.get("amount")),
                 ("（%s）" % dt) if dt else "",
-                x.get("report_file") or "报表", x.get("sheet") or "报销明细",
+                x.get("report_file") or "报表", x.get("sheet") or "11月报销明细",
                 x.get("rows") if x.get("rows") is not None else x.get("count"),
                 ("；备份 %s" % x["backup"]) if x.get("backup") else ""))
     else:
