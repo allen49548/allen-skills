@@ -163,7 +163,9 @@
     "on_handwritten_receipt": "notify_resubmit",
     "on_text_only_claim": "ignore",
     "resubmit_hint": "手写票与纯文字报销不再入账；请改发付款凭证截图（微信/支付宝账单详情、支付成功页等含金额与支付时间的机打截图）到本群补录，并注明是本人费用。",
-    "note": "只认付款凭证截图（机打、含金额+支付时间/日期、可辨订单号优先）。手写票一律跳过并入通报『请补录』；纯文本报销消息一律忽略，不作为报销记录、不登记台账。"
+    "etc_recharge_policy": "normal_reimbursement",
+    "etc_recharge_note": "2026-11-16 22:39 用户定案（规则变更）：ETC 充值成功截图按正常付款凭证结算，类别 ETC充值，不再拦截或进待确认。",
+    "note": "只认付款凭证截图（机打、含金额+支付时间/日期、可辨订单号优先）。手写票一律跳过并入通报『请补录』；纯文本报销消息一律忽略，不作为报销记录、不登记台账。ETC 充值成功截图按正常报销（见 etc_recharge_policy）。"
   },
   "dedup": {
     "phash_hamming_threshold": 6,
