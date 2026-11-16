@@ -124,15 +124,15 @@ def render(d, cfg=None):
         a("")
 
     tasks = d.get("tasks") or []
-    if tasks:
-        a("确认任务（assignee 负责人可编辑 / follower 报销人仅查看）")
+    # 2026-11-16 20:08 用户新口径：通知简洁易懂，不写「谁可看谁可编辑」等权限说明。
+    # 默认不展示任务段（config.owner_message.show_task_permission=false）；
+    # 如需恢复，把该配置设为 true。
+    show_task = (cfg or {}).get("owner_message", {}).get("show_task_permission") is True
+    if tasks and show_task:
+        a("确认任务")
         for t in tasks:
-            a("· %s %s 截止 %s%s" % (
-                t.get("driver"), t.get("url") or "-", t.get("due") or "-",
-                "" if t.get("follower") == "ok" else "（报销人 follower 待补 open_id）"))
-        a("")
-    else:
-        a("确认任务：本轮无新增入账，未新建")
+            a("· %s %s 截止 %s" % (
+                t.get("driver"), t.get("url") or "-", t.get("due") or "-"))
         a("")
 
     led = d.get("ledger") or {}

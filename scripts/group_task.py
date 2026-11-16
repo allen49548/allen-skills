@@ -177,8 +177,10 @@ def _notify_completion(cfg, driver, count, amount, task_id, dry_run=False):
     只发一条极简确认，不带订单号/路径/链接；同一 task_id 幂等，只 @ 一次。
     """
     gt = cfg.get("group_task", {})
-    if not gt.get("notify_on_complete", True):
-        return {"ok": False, "skipped": True, "reason": "notify_on_complete=false"}
+    # 2026-11-16 20:08 新口径默认不再 @：已生成任务的数据不再艾特相关人。
+    # 默认 False；如需恢复旧行为，把 config.group_task.notify_on_complete 设为 true。
+    if not gt.get("notify_on_complete", False):
+        return {"ok": False, "skipped": True, "reason": "notify_on_complete=false（默认不再群内@报销人）"}
     chat_id = (cfg.get("chat_discovery", {}).get("primary_chat_id")
                or next((k for k, v in cfg.get("chat_whitelist", {}).items()
                         if v.get("notify")), None))

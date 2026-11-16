@@ -192,15 +192,17 @@ def render_group(d, cfg=None):
     else:
         lines.append(d.get("no_change_wording")
                      or dm_cfg(cfg).get("no_change_wording")
-                     or rc_get(cfg, "no_change_wording", "本次没有新的报销，之前记过的都算数。"))
-    # 2026-11-14 23:53 用户新口径：跑完任务要在群内 @报销人并贴出确认任务，
-    # 报销人可点开查看（follower），负责人可编辑（assignee）。
-    # 有 open_id 用飞书原生 <at> 提醒；缺失时退化为纯文本 @姓名，绝不因此不发任务链接。
-    for t in (d.get("tasks") or []):
-        name = t.get("driver") or ""
-        open_id = t.get("open_id") or ""
-        at = ('<at user_id="%s">%s</at>' % (open_id, name)) if open_id else ("@" + name)
-        lines.append("%s 报销确认任务（可查看，负责人可编辑）：%s" % (at, t.get("url") or ""))
+                     or rc_get(cfg, "no_change_wording", "暂无新报销"))
+    # 2026-11-16 20:08 用户新口径：已生成任务的数据不再 @ 报销人，群内通知精简单纯。
+    # 默认不在群里 @ 任何人、不贴任务链接、不写「谁可看谁可编辑」等权限说明——
+    # 司机很忙没时间看，只需在有新数据时看到一条简洁金额通报。
+    # 如需恢复旧行为，把 config.reporting.show_task_at_in_group 设为 true（默认 false）。
+    if cfg and (cfg.get("reporting") or {}).get("show_task_at_in_group") is True:
+        for t in (d.get("tasks") or []):
+            name = t.get("driver") or ""
+            open_id = t.get("open_id") or ""
+            at = ('<at user_id="%s">%s</at>' % (open_id, name)) if open_id else ("@" + name)
+            lines.append("%s 报销确认任务：%s" % (at, t.get("url") or ""))
     return _footer(d, cfg, lines, d.get("issues"))
 
 

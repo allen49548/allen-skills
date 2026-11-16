@@ -1,5 +1,12 @@
 # 通报规则与发送降级链
 
+> **★★★ 2026-11-16 20:08 最新口径（覆盖下方所有旧通报规则，最高优先级）**
+> 用户原话：「已生成任务的数据，不再艾特相关人，通知也尽量简洁易懂，比如不要告知任务、谁可看谁可编辑等等！如果没有新的报销，告诉我没有新的报销在群里就行！因为司机很忙根本没时间看，只需要有新数据时通知就好。」
+> - **群内不 @ 任何人、不贴任务链接、不写权限说明**（`reporting.show_task_at_in_group=false`；`group_task.notify_on_complete=false`）。下方所有「@报销人 / 贴任务 / 可查看可编辑 / 完成任务@报销人」旧规则**一律作废**。
+> - **私聊专业版不写权限说明**（`owner_message.show_task_permission=false`）。
+> - **无新报销 → 群里一句「暂无新报销」**（`notify.py --no-new`，`reporting.no_new_data_policy=group_brief_only`），**不发负责人私聊长文**。下方「无数据 `--skip-group` 只发私聊不发群」旧规则**作废**。
+> - **有新数据 → 群内简洁通报**（金额+日期+合计+调侃句，无 @/任务/权限）。
+
 > **★★ 2026-11-16 16:12 用户新口径（@ 触发：门槛 + 先回应 + 权限分级，最高优先级）**
 > 0. 「**飞书艾特你要根据特定的群和内容再执行任务**」（17:12 定案）
 >    → @ 先过 `scripts/mention.py gate` 门槛：`chat_id` 必须命中 `mention_policy.trigger.allowed_chat_ids`（=物流部主群），其他群 `gate_ok=false`、不触发；`content_keywords=[]` 表示不限内容（当前口径），群内任意内容 @ 都触发。`detect --chat-id` 逐条标 `gate_ok`。飞书群 @ 非实时 webhook，靠主动拉群消息检测。

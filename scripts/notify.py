@@ -228,8 +228,12 @@ def main():
     ap.add_argument("--owner-only", action="store_true",
                     help="仅发送给负责人私聊（月报合计用）：跳过白名单校验，不发群、不发个人账本")
     ap.add_argument("--skip-group", action="store_true",
-                    help="本轮无新数据时跳过群消息、只发负责人私聊（仍记录 group.skipped 便于审计）；"
+                    help="[旧规则] 本轮无新数据时跳过群消息、只发负责人私聊（仍记录 group.skipped 便于审计）；"
                          "与 --owner-only 的区别：本参数保留群白名单上下文与跳过原因，供清单核对")
+    ap.add_argument("--no-new", action="store_true",
+                    help="[2026-11-16 20:08 新规则] 本轮无新报销：群内只发一句极简『暂无新报销』、"
+                         "不发负责人私聊长文。司机很忙没时间看，只在有新数据时才发详细通报。"
+                         "群内文案取 config.reporting.no_new_data_wording")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--config", default=CONFIG_PATH)
     ap.add_argument("--dry-run", action="store_true")
@@ -287,6 +291,35 @@ def main():
 
     results = {}
     errors = []
+
+    if args.no_new:
+        # ---- 2026-11-16 20:08 新规则：无新报销，群里只发一句极简提示，不发私聊长文 ----
+        # 仍需白名单精确校验（防串群）
+        entry = (cfg.get("chat_whitelist", {}) or {}).get(args.chat_id)
+        if not args.chat_id or entry is None or entry.get("notify") is not True:
+            print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
+                              "error": "拒绝发送：无新报销提示也需命中白名单 notify=true 的群",
+                              "chat_id": args.chat_id}}}, ensure_ascii=False, indent=2))
+            sys.exit(2)
+        wording = (cfg.get("reporting") or {}).get("no_new_data_wording") or "暂无新报销"
+        res, gerr = send_with_fallback(args.chat_id, wording, args.run_id, args.dry_run)
+        if res.get("dry_run"):
+            results["group"] = {"sent": False, "dry_run": True, "would_run": res["argv"],
+                                "text": wording, "name": entry.get("name")}
+        elif res.get("ok"):
+            results["group"] = {"sent": True, "channel": "group", "brief": True,
+                                "identity": res["identity"], "text": wording,
+                                "chat_id": args.chat_id, "name": entry.get("name")}
+        else:
+            errors.append("no_new_group: %s" % (" | ".join(gerr)[:300]))
+            results["group"] = {"sent": False, "channel": "none", "errors": gerr}
+        results["owner"] = {"sent": False, "skipped": True, "channel": "none",
+                            "reason": "本轮无新报销：按新规则只发群内一句提示，不发负责人私聊长文"}
+        out = {"results": results, "mode": "no_new"}
+        if errors:
+            out["errors"] = errors
+        _emit(out)
+        return
 
     if args.skip_group:
         # ---- 本轮无新数据：按用户规则跳过群消息，只发负责人私聊（透明仍保留在私聊与清单） ----
