@@ -1,5 +1,61 @@
 {
   "version": 6,
+  "mention_policy": {
+    "version": 1,
+    "adopted_at": "2026-11-16 16:12",
+    "note": "用户 2026-11-16 16:12 定案：①负责人@机器人可处理异常+改规则/配置/代码；司机@只能正常报销，禁止改规则/改代码/处理异常。②任何人@都要先回一句调侃有温度的『收到』，再执行任务。由 scripts/mention.py 固化。",
+    "admin": {
+      "open_ids": [
+        "REPLACE_WITH_OWNER_OPEN_ID"
+      ],
+      "names": [],
+      "note": "仅负责人本人为管理员；open_ids 命中即 admin。names 一般留空，仅 open_id 为客观身份，绝不靠姓名猜管理员。"
+    },
+    "roles": {
+      "admin": {
+        "label": "负责人",
+        "can_handle_exceptions": true,
+        "can_change_rules": true,
+        "can_change_code": true,
+        "note": "可处理异常、补录、改规则/配置/代码、确认任务等全部操作"
+      },
+      "limited": {
+        "label": "司机/其他",
+        "can_handle_exceptions": false,
+        "can_change_rules": false,
+        "can_change_code": false,
+        "note": "只能触发正常报销归集；任何改规则/改代码/处理异常请求一律拒绝，并在负责人私聊注明『需负责人』"
+      }
+    },
+    "detect": {
+      "bot_names": [
+        "REPLACE_WITH_BOT_NAME_1",
+        "workbuddy助理"
+      ],
+      "bot_open_ids": [],
+      "note": "检测群里@的是否为本机器人：@+bot 名或消息含 bot_open_id；机器人自己发的消息不算触发。bot_open_ids 填 bot 的 open_id（ou_ 开头），不是 app_id。"
+    },
+    "ack": {
+      "enabled": true,
+      "prefix": "",
+      "order": "ack_first_then_task",
+      "note": "先回应调侃收到（发主群），再进入报销/规则流程；按 run_id 日期稳定轮换，同一轮同一句。轻松调侃、有温度、不训斥、不用 emoji。",
+      "lines": {
+        "admin": [
+          "收到，老板！这事儿我盯住，稳妥给你办了——路上慢点开，安全比什么都重要。",
+          "收到！规则这块交给我，改完给你回话；您忙您的，方向盘握稳就行。",
+          "收到，领导！异常我来兜底，您放心；高速上悠着点，别让罚单抢了报销的风头。",
+          "收到！马上处理，改规则这种精细活儿我来；开慢点，平安到才是省钱王道。"
+        ],
+        "limited": [
+          "收到！票据我这就给你算上，钱的事放心交给我；车开稳点，安全第一哈。",
+          "收到啦！马上给你登记报销，别急哈；路上稳着开，人平安比啥都划算。",
+          "收到！这就安排上，报销我一条条给你记清楚；慢点开，别抢那几秒钟。",
+          "收到！票据收到，马上给你办；钱慢慢到账，车慢慢开，咱图个平平安安。"
+        ]
+      }
+    }
+  },
   "owner_open_id": "REPLACE_WITH_OWNER_OPEN_ID",
   "report_root": "REPLACE_WITH_REPORT_ROOT_ABS_PATH",
   "report_subdir": "{year}年/司机工资",
@@ -282,7 +338,11 @@
         "retired_ref": "retired_chats",
         "discovery_ref": "chat_discovery",
         "mode": "shared",
-        "alternatives": ["local_directory", "http_api", "message_queue"]
+        "alternatives": [
+          "local_directory",
+          "http_api",
+          "message_queue"
+        ]
       },
       "client": {
         "adapter": "lark-cli im +chat-messages-list",
@@ -293,7 +353,10 @@
         "order": "asc",
         "no_reactions": true,
         "identity_fallback": "none",
-        "alternatives": ["sdk", "http_api"],
+        "alternatives": [
+          "sdk",
+          "http_api"
+        ],
         "note": "--as bot 会报 230002（机器人不在群内），当前固定 user；改身份前须确认机器人已入群"
       },
       "documents": {
@@ -303,8 +366,15 @@
         "confidence_ref": "ocr.min_confidence",
         "manual_review_ref": "ocr.undated_receipt",
         "extractor": "ViewImage",
-        "supported_shapes": ["image"],
-        "alternatives": ["pdf", "structured_json", "vision_only", "structured_only"]
+        "supported_shapes": [
+          "image"
+        ],
+        "alternatives": [
+          "pdf",
+          "structured_json",
+          "vision_only",
+          "structured_only"
+        ]
       },
       "window": {
         "strategy": "lookback_days",
@@ -312,9 +382,19 @@
         "clock": "system_date",
         "incremental": false,
         "full_rescan_each_run": true,
-        "skip": ["system_message", "recalled_message"],
-        "period_field_priority": ["pay_time", "receipt_date", "created_at"],
-        "alternatives": ["incremental_cursor", "webhook_events"]
+        "skip": [
+          "system_message",
+          "recalled_message"
+        ],
+        "period_field_priority": [
+          "pay_time",
+          "receipt_date",
+          "created_at"
+        ],
+        "alternatives": [
+          "incremental_cursor",
+          "webhook_events"
+        ]
       }
     },
     "output": {
@@ -328,7 +408,11 @@
         "fields_visible_ref": "report_detail_sheet.columns.visible",
         "fields_hidden_ref": "report_detail_sheet.columns.hidden_technical",
         "grouping_ref": "report_detail_sheet.columns.month_grouping",
-        "alternatives": ["csv", "database", "none"]
+        "alternatives": [
+          "csv",
+          "database",
+          "none"
+        ]
       },
       "notifications": {
         "adapter": "scripts/notify.py",
@@ -340,8 +424,21 @@
             "type": "im_group",
             "renderer": "scripts/driver_copy.py",
             "format": "minimal",
-            "fields_visible": ["amount", "date", "mention_submitter", "task_url"],
-            "fields_hidden": ["status_model", "balance", "comparison", "record_count", "order_no", "file_name", "paths"]
+            "fields_visible": [
+              "amount",
+              "date",
+              "mention_submitter",
+              "task_url"
+            ],
+            "fields_hidden": [
+              "status_model",
+              "balance",
+              "comparison",
+              "record_count",
+              "order_no",
+              "file_name",
+              "paths"
+            ]
           },
           {
             "id": "owner_detail",
@@ -349,7 +446,9 @@
             "renderer": "scripts/owner_copy.py",
             "format": "compact_professional",
             "max_lines_hint": 25,
-            "fields_visible": ["all_operational_fields"]
+            "fields_visible": [
+              "all_operational_fields"
+            ]
           },
           {
             "id": "per_driver_dm",
@@ -358,7 +457,10 @@
             "hard_blocked": true
           }
         ],
-        "alternatives": ["webhook", "none"]
+        "alternatives": [
+          "webhook",
+          "none"
+        ]
       },
       "tasks": {
         "backend_ref": "group_task",
@@ -367,7 +469,10 @@
         "editor_role_ref": "task_permissions",
         "viewer_role_ref": "task_permissions",
         "poll_completion": true,
-        "alternatives": ["none", "custom_http"]
+        "alternatives": [
+          "none",
+          "custom_http"
+        ]
       },
       "rendering": {
         "renderer_registry": {
@@ -396,7 +501,10 @@
     "idempotency_max_len": 50,
     "chat_id_key_len": 8,
     "open_id_prefix": "ou_",
-    "lark_identity_fallback": ["bot", "user"],
+    "lark_identity_fallback": [
+      "bot",
+      "user"
+    ],
     "task_url_template": "https://applink.feishu.cn/client/todo?guid=%s",
     "description_max_chars": 1000,
     "joke_fallback": "慢点开，平安到，比什么报销都划算。",
@@ -405,14 +513,31 @@
     "header_template": "【报销通知｜%s】%s",
     "name_len_min": 2,
     "name_len_max": 12,
-    "name_forbidden_tokens": ["@", "/", "\\", ":", " ", "群", "机器人", "CLI", "Bot", "bot"],
+    "name_forbidden_tokens": [
+      "@",
+      "/",
+      "\\",
+      ":",
+      " ",
+      "群",
+      "机器人",
+      "CLI",
+      "Bot",
+      "bot"
+    ],
     "name_require_cjk": true,
     "tmp_dir": "/tmp",
     "locator_max_rows": 2000,
     "locator_max_cols": 40,
     "locator_label_max_chars": 20,
-    "locator_label_contains": ["报销"],
-    "locator_label_excludes": ["备注", "说明", "口径"],
+    "locator_label_contains": [
+      "报销"
+    ],
+    "locator_label_excludes": [
+      "备注",
+      "说明",
+      "口径"
+    ],
     "locator_right_offset": 3
   }
 }
