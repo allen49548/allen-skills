@@ -18,6 +18,8 @@
             --owner-text-file /tmp/owner.txt --run-id 20261114_0915
   notify.py --chat-id oc_xxx --text "..." --owner-text "..." --run-id ... --dry-run
   notify.py --owner-only --owner-text-file /tmp/monthly_owner.txt --run-id ...
+  notify.py --chat-id oc_xxx --skip-group --owner-text-file /tmp/owner.txt --run-id ...
+    （本轮无新数据：不发群，只发负责人私聊；group.skipped=true 记入清单）
 
 输出 JSON：{"results": {"group": {...}, "driver_dm": {...}, "owner": {...}},
            "missing_driver_dm": [], "errors": [...]}
@@ -203,6 +205,9 @@ def main():
                     help="逐司机个人账本清单 JSON：[{driver, file|text}, ...]")
     ap.add_argument("--owner-only", action="store_true",
                     help="仅发送给负责人私聊（月报合计用）：跳过白名单校验，不发群、不发个人账本")
+    ap.add_argument("--skip-group", action="store_true",
+                    help="本轮无新数据时跳过群消息、只发负责人私聊（仍记录 group.skipped 便于审计）；"
+                         "与 --owner-only 的区别：本参数保留群白名单上下文与跳过原因，供清单核对")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--config", default=CONFIG_PATH)
     ap.add_argument("--dry-run", action="store_true")
@@ -246,51 +251,58 @@ def main():
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return
 
-    whitelist = cfg.get("chat_whitelist", {})
-    entry = whitelist.get(args.chat_id)
-    if not args.chat_id:
-        print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
-                          "error": "拒绝发送：未提供 --chat-id（且非 --owner-only 模式）"}}},
-                         ensure_ascii=False, indent=2))
-        sys.exit(2)
-    if entry is None:
-        print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
-                          "error": "拒绝发送：chat_id 不在白名单（防串群）", "chat_id": args.chat_id}}},
-                         ensure_ascii=False, indent=2))
-        sys.exit(2)
-    if entry.get("notify") is not True:
-        print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
-                          "error": "拒绝发送：该群 notify=false（新群需人工确认）",
-                          "chat_id": args.chat_id, "name": entry.get("name")}}},
-                         ensure_ascii=False, indent=2))
-        sys.exit(2)
-
     results = {}
     errors = []
 
-    # ---- 通道一：物流部群（极简总览·金额公开·只列本轮有凭证的司机） ----
-    if group_text and group_text.strip():
-        res, gerr = send_with_fallback(args.chat_id, group_text, args.run_id, args.dry_run)
-        if res.get("dry_run"):
-            results["group"] = {"sent": False, "dry_run": True, "would_run": res["argv"],
-                                "name": entry.get("name")}
-        elif res.get("ok"):
-            results["group"] = {"sent": True, "channel": "group", "identity": res["identity"],
-                                "chat_id": args.chat_id, "name": entry.get("name")}
-        else:
-            # 群内两种身份都失败 -> 降级私聊（总览照发到负责人，确保不漏）
-            dm = cfg.get("fallback_dm_chat_id")
-            fb = "⚠ 群内通报失败，降级私聊\n目标群：%s（%s）\n失败：%s\n\n%s" % (
-                entry.get("name"), args.chat_id, " | ".join(gerr)[:500], group_text)
-            dres, derr = send_with_fallback(dm, fb, args.run_id, args.dry_run)
-            if dres.get("ok"):
-                results["group"] = {"sent": True, "channel": "dm_fallback", "identity": dres["identity"],
-                                    "chat_id": dm, "original_group": args.chat_id}
-            else:
-                errors.append("group_dm_fallback: %s" % (" | ".join(derr)[:300]))
-                results["group"] = {"sent": False, "channel": "none", "errors": gerr}
+    if args.skip_group:
+        # ---- 本轮无新数据：按用户规则跳过群消息，只发负责人私聊（透明仍保留在私聊与清单） ----
+        entry0 = (cfg.get("chat_whitelist", {}) or {}).get(args.chat_id) or {}
+        results["group"] = {"sent": False, "skipped": True, "channel": "none",
+                            "reason": "本轮无新数据：按配置跳过群消息，仅发送负责人私聊",
+                            "chat_id": args.chat_id, "name": entry0.get("name")}
     else:
-        results["group"] = {"sent": False, "channel": "none", "error": "群内总览内容为空"}
+        whitelist = cfg.get("chat_whitelist", {})
+        entry = whitelist.get(args.chat_id)
+        if not args.chat_id:
+            print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
+                              "error": "拒绝发送：未提供 --chat-id（且非 --owner-only / --skip-group 模式）"}}},
+                             ensure_ascii=False, indent=2))
+            sys.exit(2)
+        if entry is None:
+            print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
+                              "error": "拒绝发送：chat_id 不在白名单（防串群）", "chat_id": args.chat_id}}},
+                             ensure_ascii=False, indent=2))
+            sys.exit(2)
+        if entry.get("notify") is not True:
+            print(json.dumps({"results": {"group": {"sent": False, "channel": "none",
+                              "error": "拒绝发送：该群 notify=false（新群需人工确认）",
+                              "chat_id": args.chat_id, "name": entry.get("name")}}},
+                             ensure_ascii=False, indent=2))
+            sys.exit(2)
+
+        # ---- 通道一：物流部群（极简总览·金额公开·只列本轮有凭证的司机） ----
+        if group_text and group_text.strip():
+            res, gerr = send_with_fallback(args.chat_id, group_text, args.run_id, args.dry_run)
+            if res.get("dry_run"):
+                results["group"] = {"sent": False, "dry_run": True, "would_run": res["argv"],
+                                    "name": entry.get("name")}
+            elif res.get("ok"):
+                results["group"] = {"sent": True, "channel": "group", "identity": res["identity"],
+                                    "chat_id": args.chat_id, "name": entry.get("name")}
+            else:
+                # 群内两种身份都失败 -> 降级私聊（总览照发到负责人，确保不漏）
+                dm = cfg.get("fallback_dm_chat_id")
+                fb = "⚠ 群内通报失败，降级私聊\n目标群：%s（%s）\n失败：%s\n\n%s" % (
+                    entry.get("name"), args.chat_id, " | ".join(gerr)[:500], group_text)
+                dres, derr = send_with_fallback(dm, fb, args.run_id, args.dry_run)
+                if dres.get("ok"):
+                    results["group"] = {"sent": True, "channel": "dm_fallback", "identity": dres["identity"],
+                                        "chat_id": dm, "original_group": args.chat_id}
+                else:
+                    errors.append("group_dm_fallback: %s" % (" | ".join(derr)[:300]))
+                    results["group"] = {"sent": False, "channel": "none", "errors": gerr}
+        else:
+            results["group"] = {"sent": False, "channel": "none", "error": "群内总览内容为空"}
 
     # ---- 已停用的司机私聊通道：配置禁用时硬拦截，兼容旧 prompt 也不发 ----
     pcfg = (cfg.get("reporting") or {}).get("per_driver_dm") or {}
