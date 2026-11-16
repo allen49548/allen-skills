@@ -101,6 +101,14 @@ agent_created: true
 
 ## 固定配置（先读 `config.json`）
 
+### 飞书机器人配置自检（2026-11-16 用户定案，铁律）
+
+**任何飞书通知发出前**，`notify.py` 都会先跑 `scripts/bot_check.py` 检测机器人配置，并在输出 JSON 里带 `bot_setup` 字段。若 `bot_setup.bot_setup_required=true`：
+
+- **不要静默、不要用个人身份（`--as user`）冒充发送**；
+- 把 `bot_setup.reminder`（含问题清单 + 完整配置教程）**原样转述给用户**，提示先按教程配置机器人；
+- 完整教程见本目录 `飞书机器人配置教程.md`。统一通知机器人 = 廖浩成's Feishu CLI（`cli_aa7fca0a72ba9bb4`）。
+
 所有可变参数集中在 `config.json`，**绝不凭记忆猜路径、群名、chat_id、司机归属或列位置**。关键值：
 
 | 项 | 值 |

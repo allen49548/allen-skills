@@ -45,6 +45,17 @@ def load_config(path):
 
 # 由 main() 在读取配置后设置；缺省 {} 时全部回退原硬编码值，保证纯函数直接调用行为不变
 _CFG = {}
+# 由 main() 的 bot_check 自检结果设置；_emit 输出时统一注入，供会话转述给用户
+_BOT_SETUP = None
+
+
+def _emit(obj):
+    """统一输出：附带飞书机器人配置自检结果（未配置时含提醒 + 教程）。"""
+    global _BOT_SETUP
+    if _BOT_SETUP is not None:
+        obj = dict(obj)
+        obj["bot_setup"] = _BOT_SETUP
+    print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
 def call_send(chat_id, text, identity, run_id, dry_run=False):
@@ -228,6 +239,16 @@ def main():
     global _CFG
     _CFG = cfg
 
+    # ---- 飞书机器人配置自检（2026-11-16 用户定案）----
+    # 未配置时不静默、不冒充个人身份：在输出里带醒目提醒 + 教程，交给会话转述给用户。
+    global _BOT_SETUP
+    try:
+        import bot_check
+        # 只传「群」id 做在群检测；owner_dm 是 p2p 私聊，不参与群检测（会误报）
+        _BOT_SETUP = bot_check.check([args.chat_id] if args.chat_id else [])
+    except Exception as _e:  # 检测本身失败不阻断发送
+        _BOT_SETUP = {"bot_setup_required": False, "check_error": str(_e)[:200]}
+
     group_text = args.text
     if args.text_file:
         with open(args.text_file, "r", encoding="utf-8") as f:
@@ -261,7 +282,7 @@ def main():
         out = {"results": results}
         if errors:
             out["errors"] = errors
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        _emit(out)
         return
 
     results = {}
@@ -353,7 +374,7 @@ def main():
     out = {"results": results, "missing_driver_dm": []}
     if errors:
         out["errors"] = errors
-    print(json.dumps(out, ensure_ascii=False, indent=2))
+    _emit(out)
 
 
 if __name__ == "__main__":
