@@ -52,9 +52,9 @@ agent_created: true
 
 由一条自动化**每天 09:00** 触发。WorkBuddy 自动化只支持时间调度，**通报发生在每次运行时，不是实时推送**；不得宣称实时。
 
-## 艾特（@）触发：权限分级 + 先调侃回应（2026-11-16 16:12 用户定案，铁律）
+## 艾特（@）触发：群/内容门槛 + 权限分级 + 先调侃回应（2026-11-16 用户定案，铁律）
 
-**用户原话**：①「负责人艾特机器人，权限是可以处理异常和修改规则，司机艾特只能处理正常报销，不能更改规则和修改代码！」②「任何人艾特你要先回应一句调侃的收到，再执行任务，回应有温。」
+**用户原话**：①「负责人艾特机器人，权限是可以处理异常和修改规则，司机艾特只能处理正常报销，不能更改规则和修改代码！」②「任何人艾特你要先回应一句调侃的收到，再执行任务，回应有温。」③「飞书艾特你要根据特定的群和内容再执行任务。」
 
 这两条是**所有 @ 触发场景的硬边界**，由 `scripts/mention.py` 固化，配置在 `config.mention_policy`（唯一真源）。
 
@@ -71,8 +71,14 @@ agent_created: true
   - 发送者身份不完整 / 解析不出 → 一律 `limited`，绝不放权。
 - **司机艾特 ≠ 管理员指令**：司机 @ 的作用仅限「发起一轮正常报销归集」（沿用只认付款凭证截图、四层去重、唯一报销明细 sheet 等全部铁律），不因 @ 而获得任何配置或代码变更权限。
 
+**铁律三：只在指定群 + 指定内容才触发（2026-11-16 17:12 用户定案）**
+- @ 机器人**不是在任何地方都触发任务**：必须先过 `mention.py gate` 门槛，通过才进入 classify/ack/执行。
+- **群门槛**：`chat_id` 必须精确命中 `mention_policy.trigger.allowed_chat_ids`（当前 = 物流部主群），**其他群一律拒绝、`gate_ok=false`，不得触发**。
+- **内容门槛**：`mention_policy.trigger.content_keywords` 为空数组 = **不限内容**（用户已选「仅物流部群 + 任意内容」），群内任何内容的 @ 都触发；如以后要限定内容，填入关键词（命中任一即触发）。
+- 注意：飞书群 @ 目前**不是实时 webhook 推送**——是 Agent 主动拉群消息时才检测（或定时跑时）。@ 完当下不回应属正常，需等下次拉取/运行。
+
 **判定与审计流程**（Agent 检测 @ 后按顺序执行）：
-1. `python3 scripts/mention.py detect --messages <lark-cli消息.json>` → 检出所有 @ 机器人事件及触发者。
+1. `python3 scripts/mention.py gate --chat-id <来源群> --text "<消息正文>"` → `gate_ok=true` 才继续；`false` 直接忽略（非指定群/内容）。`detect --messages <json> --chat-id <来源群>` 也会逐条标注 `gate_ok`。
 2. 对每条命中 `python3 scripts/mention.py classify --sender-id <id> --sender-name <姓名>` → 得 `role` / `allowed` / `denied`。
 3. **先 ack**：`python3 scripts/mention.py ack --role <role> --run-id <run> --name <姓名> --send`（先回应）。
 4. 再按 `allowed` 执行：limited 只跑正常报销归集；admin 才可按其明确指令处理异常 / 改规则。
@@ -80,11 +86,12 @@ agent_created: true
 
 ## 触发时机
 
-- 每天 09:00 定时自动化运行（常规归集 + 两层通报）
-- 每月 1–4 号 09:00 定时自动化运行「月初月报」（独立自动化，见下节）
+- ~~每天 09:00 定时自动化运行（常规归集 + 两层通报）~~ **已不存在**（2026-11-16 17:12 核查：当前自动化系统无此任务、crontab 亦无；用户选择保留现状、不重建）。常规归集改由下面几种手动 / @ 触发。
+- 每月 1–4 号 09:00 定时自动化运行「月初月报」（独立自动化，见下节；**保留**）
+- 每月 10 号 09:00 定时自动化运行「司机工资·每月计算与核对」（独立自动化；**保留**）
 - 用户要求同步 / 补录 / 核对 / 手工跑一次司机报销
 - 用户要求查看去重台账、按司机分类统计、月度统计或异常清单
-- **司机或负责人在群里 @ 机器人**（@ 本身即触发；先按上节 ack 回应，再按权限分级执行：司机仅正常报销，负责人可处理异常 / 改规则）
+- **在指定群（物流部主群）里 @ 机器人**：先过 `gate` 群/内容门槛，再按上节 ack 回应 + 权限分级执行（司机仅正常报销，负责人可处理异常 / 改规则）。其他群的 @ 不触发
 - 群成员变化后可选同步名册（仅提升归属精度，不是必须，也不催全员到齐）
 
 ## 固定配置（先读 `config.json`）
@@ -269,7 +276,7 @@ agent_created: true
 
 | 文件 | 用途 |
 |---|---|
-| `config.json` | **version 6**：唯一主群、停用群、弹性司机名册、`reporting.active_drivers_only` / `notification_mode=group_only` / `per_driver_dm.enabled=false`、路径、阈值；`driver_message` = 极简司机文案口径 + 安全驾驶调侃句库；`mention_policy` = @ 触发权限分级（admin/limited）+ 先调侃回应句库 + `ack.identity=["bot"]`（回应只用机器人、不降级个人号）；`runtime` = 原散落脚本的硬编码默认值（可不填） |
+| `config.json` | **version 6**：唯一主群、停用群、弹性司机名册、`reporting.active_drivers_only` / `notification_mode=group_only` / `per_driver_dm.enabled=false`、路径、阈值；`driver_message` = 极简司机文案口径 + 安全驾驶调侃句库；`mention_policy` = @ 触发权限分级（admin/limited）+ 先调侃回应句库 + `ack.identity=["bot"]`（回应只用机器人、不降级个人号）+ `trigger`（`allowed_chat_ids` 指定群、`content_keywords=[]` 不限内容）；`runtime` = 原散落脚本的硬编码默认值（可不填） |
 | `config.example.json` | 入库的脱敏配置模板，含完整的 `runtime` 节与默认值 |
 | `scripts/runtime_config.py` | 运行时配置单一入口：配置优先、原值兜底；`current_year()` / `state_dir()` 等共享 helper |
 | `scripts/driver_roster.py` | 名册同步（可选，仅提升精度）、逐条司机归属解析（含 `is_new_driver` 弹性归属）、名册列表 |
@@ -284,4 +291,4 @@ agent_created: true
 | `scripts/notify.py` | 白名单精确校验 + 两层飞书发送（群 / 负责人）+ 降级 + 幂等键；对 `--driver-dm-manifest` 硬拦截，绝不发司机私聊 |
 | `scripts/group_task.py` | 按司机分组的报销确认飞书任务（create / check / pending） |
 | `scripts/monthly_summary.py` | 按司机分类 + 四态拆分的月初月报（compute / send / dry-run）；只列当月有凭证的司机，专业版保留四态/环比，群内版由 `driver_copy.py` 极简渲染 |
-| `scripts/mention.py` | **@ 触发权限分级 + 调侃回应**：`detect`（从群消息检 @ 机器人事件）/ `classify`（按 open_id 判 admin/limited 与 allowed/denied）/ `ack`（渲染调侃有温度的收到，`--send` 按白名单先发群、**固定 `--as bot` 不降级个人 user**）；幂等键 `reimb-ack-<run>-<chat>` |
+| `scripts/mention.py` | **@ 触发群门槛 + 权限分级 + 调侃回应**：`gate`（指定群/内容门槛 `allowed_chat_ids`/`content_keywords`，其他群拒绝）/ `detect`（检 @ 事件，传 `--chat-id` 时逐条标 `gate_ok`）/ `classify`（按 open_id 判 admin/limited 与 allowed/denied）/ `ack`（渲染调侃收到，`--send` 按白名单发群、**固定 `--as bot` 不降级个人 user**）；幂等键 `reimb-ack-<run>-<chat>` |

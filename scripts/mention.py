@@ -10,6 +10,7 @@
 
   classify  按发送者判定角色与能力边界（owner=admin / driver=limited / unknown=limited）
   detect    从 lark-cli 拉下来的群消息 JSON 中检测「艾特机器人」事件
+  gate      群门槛 + 内容门槛：判断这条 @ 是否落在允许触发的群、是否命中触发词
   ack       渲染「调侃 + 有温度」的收到文案；--send 时按白名单发到主群（先回应，固定本机器人 --as bot，不降级个人身份）
 
 权限分级（mention_policy.roles，config 唯一真源，脚本仅给默认兜底）：
@@ -175,8 +176,42 @@ def _at_text_fields(content):
     return ""
 
 
-def detect(cfg, messages, bot_names=None, bot_open_ids=None):
-    """从 lark-cli 消息列表里检测「艾特机器人」事件，逐条给出角色与建议动作。"""
+def gate(cfg, chat_id, text=None):
+    """@ 触发门槛：指定群 + 指定内容才执行任务（2026-11-16 17:12 用户定案）。
+
+    - 群门槛：chat_id 必须精确命中 mention_policy.trigger.allowed_chat_ids，
+      其他群一律 gate_ok=false、不得触发。
+    - 内容门槛：trigger.content_keywords 为空 = 不限内容（当前口径）；
+      非空时 text 命中任一关键词才算通过。
+    """
+    trig = (cfg.get("mention_policy") or {}).get("trigger") or {}
+    enabled = bool(trig.get("enabled", True))
+    allowed_ids = set(trig.get("allowed_chat_ids") or [])
+    keywords = [k for k in (trig.get("content_keywords") or []) if k]
+
+    if not enabled:
+        return {"ok": True, "gate_ok": False, "reason": "trigger 已禁用", "chat_id": chat_id,
+                "chat_ok": None, "content_ok": None}
+    chat_ok = bool(chat_id) and chat_id in allowed_ids
+    if keywords:
+        text_l = (text or "").lower()
+        content_ok = any(k.lower() in text_l for k in keywords)
+    else:
+        content_ok = True  # 空关键词 = 不限内容
+    gate_ok = chat_ok and content_ok
+    reason = ("允许：群命中白名单" if chat_ok else "拒绝：群不在允许列表") + (
+        "" if content_ok else "；内容未命中触发词")
+    return {"ok": True, "gate_ok": gate_ok, "reason": reason, "chat_id": chat_id,
+            "chat_ok": chat_ok, "content_ok": content_ok,
+            "allowed_chat_ids": sorted(allowed_ids), "content_keywords": keywords}
+
+
+def detect(cfg, messages, bot_names=None, bot_open_ids=None, chat_id=None):
+    """从 lark-cli 消息列表里检测「艾特机器人」事件，逐条给出角色与建议动作。
+
+    chat_id 传入时会叠加 gate 群/内容门槛，每条 hit 标注 gate_ok；
+    不传时 gate_ok=None（仅检测，不判定是否应触发）。
+    """
     mp = cfg.get("mention_policy") or {}
     detect_cfg = mp.get("detect") or {}
     names = set(bot_names if bot_names is not None else (detect_cfg.get("bot_names") or []))
@@ -211,7 +246,7 @@ def detect(cfg, messages, bot_names=None, bot_open_ids=None):
         if not mentioned:
             continue
         verdict = classify(cfg, sid, sname)
-        hits.append({
+        hit = {
             "message_id": m.get("message_id"),
             "create_time": m.get("create_time"),
             "sender_id": sid,
@@ -221,7 +256,14 @@ def detect(cfg, messages, bot_names=None, bot_open_ids=None):
             "allowed": verdict["allowed"],
             "denied": verdict["denied"],
             "reason": verdict["reason"],
-        })
+        }
+        if chat_id is not None:
+            g = gate(cfg, chat_id, text)
+            hit["gate_ok"] = g["gate_ok"]
+            hit["gate_reason"] = g["reason"]
+        else:
+            hit["gate_ok"] = None
+        hits.append(hit)
     return {"ok": True, "count": len(hits), "hits": hits}
 
 
@@ -302,9 +344,15 @@ def main():
 
     p_det = sub.add_parser("detect", help="从群消息 JSON 检测艾特机器人事件")
     p_det.add_argument("--messages", required=True, help="lark-cli +chat-messages-list --format json 的输出")
+    p_det.add_argument("--chat-id", help="消息来源群；传入则叠加群/内容门槛并标注 gate_ok")
     p_det.add_argument("--bot-names", nargs="*")
     p_det.add_argument("--bot-open-ids", nargs="*", help="机器人 bot_open_id（不是 app_id）")
     p_det.add_argument("--config")
+
+    p_gate = sub.add_parser("gate", help="群门槛+内容门槛：这条@是否允许触发任务")
+    p_gate.add_argument("--chat-id", required=True, help="消息来源群 chat_id")
+    p_gate.add_argument("--text", default="", help="消息正文（内容关键词匹配用）")
+    p_gate.add_argument("--config")
 
     p_ack = sub.add_parser("ack", help="渲染调侃收到文案，可先发群再执行")
     p_ack.add_argument("--role", choices=["admin", "limited"], required=True)
@@ -327,7 +375,9 @@ def main():
         with open(args.messages, "r", encoding="utf-8") as f:
             payload = json.load(f)
         msgs = payload.get("data", {}).get("messages", []) if isinstance(payload, dict) else payload
-        result = detect(cfg, msgs, args.bot_names, args.bot_open_ids)
+        result = detect(cfg, msgs, args.bot_names, args.bot_open_ids, args.chat_id)
+    elif args.cmd == "gate":
+        result = gate(cfg, args.chat_id, args.text)
     elif args.cmd == "ack":
         result = render_ack(cfg, args.role, args.run_id, args.name)
         if args.out:

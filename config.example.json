@@ -35,6 +35,14 @@
       "bot_open_ids": [],
       "note": "检测群里@的是否为本机器人：@+bot 名或消息含 bot_open_id；机器人自己发的消息不算触发。bot_open_ids 填 bot 的 open_id（ou_ 开头），不是 app_id。"
     },
+    "trigger": {
+      "enabled": true,
+      "allowed_chat_ids": [
+        "REPLACE_WITH_LOGISTICS_GROUP_CHAT_ID"
+      ],
+      "content_keywords": [],
+      "note": "2026-11-16 17:12 用户定案：@机器人只在【指定的群】+【指定内容】才执行任务。①群门槛：allowed_chat_ids 精确匹配，只有物流部群(主群)的 @ 才触发，其他群一律忽略；②内容门槛：content_keywords 为空数组表示【不限内容】（用户选『仅物流部群+任意内容』），如以后要限定内容，填入关键词（命中任一即触发）。由 scripts/mention.py gate 固化；detect 结果会对每条 hit 标注 gate_ok。"
+    },
     "ack": {
       "enabled": true,
       "prefix": "",
