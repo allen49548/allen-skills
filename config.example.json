@@ -29,11 +29,12 @@
     },
     "detect": {
       "bot_names": [
+        "AI小助手",
         "REPLACE_WITH_BOT_NAME_1",
         "workbuddy助理"
       ],
       "bot_open_ids": [],
-      "note": "检测群里@的是否为本机器人：@+bot 名或消息含 bot_open_id；机器人自己发的消息不算触发。bot_open_ids 填 bot 的 open_id（ou_ 开头），不是 app_id。"
+      "note": "检测群里@的是否为本机器人：@+bot 名或消息含 bot_open_id；机器人自己发的消息不算触发。bot_open_ids 填 bot 的 open_id（ou_ 开头），不是 app_id。【2026-11-16 19:20 用户定案】群里@的是「AI小助手」，已加入 bot_names 确保触发；但 AI小助手只作触发识别、不在群里发任何消息，群里所有消息（收到/通报/@司机/任务链接）统一由发通报的 bot（廖浩成's Feishu CLI）发。"
     },
     "trigger": {
       "enabled": true,
