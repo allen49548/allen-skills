@@ -127,15 +127,32 @@ def render(d, cfg=None):
         a("")
 
     tasks = d.get("tasks") or []
-    # 2026-11-16 20:08 用户新口径：通知简洁易懂，不写「谁可看谁可编辑」等权限说明。
-    # 默认不展示任务段（config.owner_message.show_task_permission=false）；
-    # 如需恢复，把该配置设为 true。
-    show_task = (cfg or {}).get("owner_message", {}).get("show_task_permission") is True
+    # 2026-11-16 20:08：不写「谁可看谁可编辑」等权限说明。
+    # 2026-11-17 00:12 用户反馈「王博成第二笔没有任务链接」：负责人私聊必须带任务链接（去点完成用），
+    # 但只保留「司机 + 链接 + 截止」一行，不加权限措辞；群里仍不贴（reporting.show_task_at_in_group=false）。
+    om = (cfg or {}).get("owner_message", {}) or {}
+    show_task = om.get("show_task_link")
+    if show_task is None:
+        show_task = True  # 默认展示；要隐藏显式设 false
     if tasks and show_task:
         a("确认任务")
+        # 同一司机多批（多笔任务）时加序号，避免"第二笔不知道是哪条"
+        counter = {}
         for t in tasks:
-            a("· %s %s 截止 %s" % (
-                t.get("driver"), t.get("url") or "-", t.get("due") or "-"))
+            counter[t.get("driver")] = counter.get(t.get("driver"), 0) + 1
+        seen = {}
+        for t in tasks:
+            driver = t.get("driver") or ""
+            url = t.get("url") or ""
+            due = t.get("due") or ""
+            seen[driver] = seen.get(driver, 0) + 1
+            label = driver
+            if counter[driver] > 1:
+                label = "%s 第%d批" % (driver, seen[driver])
+            line = "· %s %s" % (label, url or "（链接待补）")
+            if due:
+                line += " 截止 %s" % due
+            a(line)
         a("")
 
     led = d.get("ledger") or {}

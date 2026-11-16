@@ -587,6 +587,8 @@
     "show_task_permission": false,
     "show_task_permission_note": "2026-11-16 20:08：通知简洁，不写谁可看谁可编辑。",
     "show_duplicate_detail": false,
-    "show_duplicate_detail_note": "2026-11-16 20:21：负责人私聊不逐笔列重复提交（旧凭证），只一行汇总；逐项只进运行清单。设true恢复逐项透明。"
+    "show_duplicate_detail_note": "2026-11-16 20:21：负责人私聊不逐笔列重复提交（旧凭证），只一行汇总；逐项只进运行清单。设true恢复逐项透明。",
+    "show_task_link": true,
+    "show_task_link_note": "用户 2026-11-17 00:12 反馈：负责人私聊必须能看到确认任务链接（王博成第二笔没链接）。只保留「司机+链接+截止」一行，不写谁可看谁可编辑。设 false 可隐藏。"
   }
 }

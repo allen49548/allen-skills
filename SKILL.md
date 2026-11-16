@@ -17,7 +17,8 @@ agent_created: true
 用户原话：「已生成任务的数据，不再艾特相关人，通知也尽量简洁易懂，比如不要告知任务、谁可看谁可编辑等等！如果没有新的报销，告诉我没有新的报销在群里就行！因为司机很忙根本没时间看，只需要有新数据时通知就好。」
 
 - **群内不 @ 任何人**（配置 `reporting.show_task_at_in_group=false`）：不再 @ 报销人、不贴确认任务链接、不写「谁可看谁可编辑」等权限说明；负责人点完成任务后也不再群内 @（`group_task.notify_on_complete=false`）。下方所有「群内 @报销人 / 贴任务 / follower 可查看负责人可编辑」旧规则**一律作废**。
-- **私聊精简、不写权限说明**（配置 `owner_message.show_task_permission=false`）：负责人专业版不再写「assignee 可编辑 / follower 仅查看」等，也不展示任务段。
+- **私聊精简、不写权限说明**（配置 `owner_message.show_task_permission=false`）：负责人专业版不再写「assignee 可编辑 / follower 仅查看」等权限措辞。
+- **⚠️ 2026-11-17 00:12 修正（用户反馈「王博成第二笔没有任务链接」）**：负责人私聊**必须展示确认任务链接**（`owner_message.show_task_link=true`，默认开），同一司机多批时按「司机 第N批 + 链接 + 截止」逐条列出；只保留这一行，不加权限措辞。**群里仍然不贴链接**（20:08 群内口径不变）。原因：没有链接就点不了完成，报销无法闭环。
 - **无新报销 → 群里一句「暂无新报销」即可**（配置 `reporting.no_new_data_policy=group_brief_only`、`no_new_data_wording=暂无新报销`）：用 `notify.py --no-new`，群内发一句极简提示、**不发负责人私聊长文**。这**覆盖**旧的「无数据 `--skip-group` 只发私聊不发群」规则。
 - **有新数据照常发简洁通报**：群内只列金额+日期+合计+调侃句，不含任务/@/权限。
 - 以上全部配置化（config.json），设 true 可恢复旧行为；脚本默认值已按新口径。
