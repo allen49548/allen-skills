@@ -10,9 +10,13 @@ import argparse
 import json
 import os
 import re
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
 
 
 def load_config():
@@ -86,8 +90,12 @@ def main():
     out["sheet"] = sheet
     ws_f = wb_formula[sheet]
     ws_v = wb_value[sheet]
-    max_row = min(ws_f.max_row or 0, 2000)
-    max_col = min(ws_f.max_column or 0, 40)
+    max_row = min(ws_f.max_row or 0, int(rc_get(cfg, "locator_max_rows", 2000)))
+    max_col = min(ws_f.max_column or 0, int(rc_get(cfg, "locator_max_cols", 40)))
+    label_contains = rc_get(cfg, "locator_label_contains", ["报销"])
+    label_excludes = rc_get(cfg, "locator_label_excludes", ["备注", "说明", "口径"])
+    label_max = int(rc_get(cfg, "locator_label_max_chars", 20))
+    right_offset = int(rc_get(cfg, "locator_right_offset", 3))
 
     for row in ws_f.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
         for cell in row:
@@ -95,13 +103,13 @@ def main():
             if not isinstance(v, str):
                 continue
             label = v.strip()
-            if "报销" not in label or any(k in label for k in ("备注", "说明", "口径")):
+            if not any(k in label for k in label_contains) or any(k in label for k in label_excludes):
                 continue
-            if len(label) > 20:
+            if len(label) > label_max:
                 continue
             r, c = cell.row, cell.column
             found = None
-            for offset in range(1, 4):
+            for offset in range(1, right_offset + 1):
                 if c + offset > max_col:
                     break
                 fv = ws_f.cell(row=r, column=c + offset).value
@@ -121,7 +129,7 @@ def main():
             else:
                 out["candidates"].append({"sheet": sheet, "label_cell": cell.coordinate,
                                           "label": label, "value": None,
-                                          "note": "右侧 3 格内无数值"})
+                                          "note": "右侧 %d 格内无数值" % right_offset})
     wb_formula.close()
     wb_value.close()
 

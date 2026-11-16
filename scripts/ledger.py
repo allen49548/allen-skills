@@ -23,6 +23,9 @@ from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
 
 
 def load_config():
@@ -39,6 +42,10 @@ def db_path(cfg):
 def connect(cfg):
     conn = sqlite3.connect(db_path(cfg))
     conn.row_factory = sqlite3.Row
+    # 性能：schema 已就绪时跳过建表/迁移/建索引的 DDL（此前每次 check/add 都全跑一遍）。
+    # 用 PRAGMA user_version 做一次性标记，仅在首次建库或结构缺列时执行迁移。
+    if _schema_ready(conn):
+        return conn
     conn.execute("""CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         message_id TEXT UNIQUE,
@@ -80,7 +87,38 @@ def connect(cfg):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sha ON entries(image_sha256)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_biz ON entries(business_key)")
     conn.commit()
+    _mark_schema_ready(conn)
     return conn
+
+
+# 迁移后的结构指纹：新增列时改这里即可触发一次迁移
+_SCHEMA_VERSION = 2
+_EXPECTED_COLS = {
+    "id", "message_id", "chat_id", "driver", "receipt_date", "amount", "category",
+    "image_sha256", "phash", "business_key", "report_file", "sheet", "cell",
+    "old_value", "new_value", "task_id", "task_url", "task_status", "reimbursed",
+    "reimbursed_at", "no_report", "run_id", "created_at", "order_no", "pay_time",
+    "voided", "voided_at", "void_reason",
+}
+
+
+def _schema_ready(conn):
+    """表结构完整且 user_version 匹配时返回 True，跳过重复 DDL。"""
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] != _SCHEMA_VERSION:
+            return False
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(entries)")}
+        return _EXPECTED_COLS <= cols
+    except sqlite3.Error:
+        return False
+
+
+def _mark_schema_ready(conn):
+    try:
+        conn.execute("PRAGMA user_version = %d" % _SCHEMA_VERSION)
+        conn.commit()
+    except sqlite3.Error:
+        pass
 
 
 def file_sha256(path):
@@ -156,7 +194,8 @@ def cmd_check(args, cfg, conn):
 
     if ph:
         threshold = cfg.get("dedup", {}).get("phash_hamming_threshold", 6)
-        since = (datetime.now() - timedelta(days=90)).isoformat()
+        lookback = int(rc_get(cfg, "phash_lookback_days", 90))
+        since = (datetime.now() - timedelta(days=lookback)).isoformat()
         rows = cur.execute(
             "SELECT * FROM entries WHERE phash IS NOT NULL AND created_at>=?", (since,)
         ).fetchall()
@@ -337,7 +376,7 @@ def cmd_balance(args, cfg, conn):
     by = {}
     for r in rows:
         e = dict(r)
-        d = e.get("driver") or "未识别司机"
+        d = e.get("driver") or rc_get(cfg, "unknown_driver", "未识别司机")
         rec = by.setdefault(d, {
             "driver": d,
             "reimbursed": {"count": 0, "amount": 0.0},

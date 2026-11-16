@@ -24,6 +24,12 @@ from datetime import date, timedelta
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
 LEDGER = os.path.join(HERE, "ledger.py")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
+
+# main() 读取配置后设置；纯函数直接调用时回退原硬编码值
+_CFG = {}
 
 
 def load_config():
@@ -77,7 +83,9 @@ def cmd_create(args, cfg):
         "逐笔明细：报表「报销明细」sheet / 运行清单。",
         "权限：负责人可编辑；报销人仅查看与评论，不能点完成。",
     ]
-    description = "\n".join(desc_lines)[:1000]
+    desc_max = int(gt.get("description_max_chars")
+                   or rc_get(_CFG, "description_max_chars", 1000))
+    description = "\n".join(desc_lines)[:desc_max]
 
     cmd = [
         "lark-cli", "task", "+create", "--as", "user",
@@ -85,7 +93,8 @@ def cmd_create(args, cfg):
         "--description", description,
         "--due", due,
         "--assignee", assignee,
-        "--idempotency-key", "reimb:%s:%s" % (args.run_id, args.driver),
+        "--idempotency-key", "%s:%s:%s" % (
+            rc_get(_CFG, "idempotency_prefix", "reimb"), args.run_id, args.driver),
         "--format", "json",
     ]
     if args.dry_run:
@@ -107,7 +116,8 @@ def cmd_create(args, cfg):
     task_id = task.get("task_guid") or task.get("guid") or task.get("id") or task.get("task_id")
     task_url = task.get("url") or task.get("applink_url")
     if task_id and not task_url:
-        task_url = "https://applink.feishu.cn/client/todo?guid=%s" % task_id
+        task_url = rc_get(_CFG, "task_url_template",
+                          "https://applink.feishu.cn/client/todo?guid=%s") % task_id
     result["task_id"] = task_id
     result["task_url"] = task_url
 
@@ -292,6 +302,8 @@ def main():
     sub.add_parser("pending")
     args = p.parse_args()
     cfg = load_config()
+    global _CFG
+    _CFG = cfg
     out = {"create": cmd_create, "check": cmd_check, "pending": cmd_pending}[args.cmd](args, cfg)
     print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
     sys.exit(0 if out.get("ok") else 1)

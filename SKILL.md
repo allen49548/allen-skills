@@ -193,6 +193,34 @@ agent_created: true
 
 调用：`python3 scripts/monthly_summary.py --send --run-id <运行ID>`（或 `--compute` 仅看数据，`--month YYYY-MM` 指定月份，`--dry-run` 不真发）。结果写 `state/runs/monthly_<YYYY-MM>_<HHMM>.md`。
 
+## 运行时配置与性能（2026-11-16 优化）
+
+**硬编码已统一收敛到 `config.json` 的 `runtime` 节**，由 `scripts/runtime_config.py` 统一读取；所有 helper 都是「配置优先、原值兜底」——`runtime` 不填或写错类型时，行为与改造前逐字一致。脱敏模板见 `config.example.json`。
+
+可配置项（全部有与原值相同的默认值）：
+
+| 类别 | 键 | 原硬编码位置 |
+|---|---|---|
+| 业务年份 / 名称 | `default_year`、`unknown_driver`、`default_group_name`、`sheet_name`、`undated_group` | `driver_roster.main`、`ledger.balance`、`monthly_summary`、`reimb_detail`、`driver_copy` |
+| 窗口 / 阈值 | `run_log_window_days`、`phash_lookback_days`、`date_max_show`、`locator_max_rows`、`locator_max_cols`、`locator_label_max_chars`、`locator_label_contains`、`locator_label_excludes`、`locator_right_offset` | `owner_copy`、`ledger.cmd_check`、`driver_copy.fmt_dates`、`locate_report` |
+| 文案模板 | `joke_fallback`、`no_change_wording`、`monthly_no_change_wording`、`issue_prefix`、`header_template`、`task_url_template`、`description_max_chars` | `driver_copy`、`monthly_summary`、`group_task` |
+| 身份 / 幂等 | `lark_identity_fallback`、`idempotency_prefix`、`idempotency_max_len`、`chat_id_key_len`、`open_id_prefix` | `notify`、`group_task`、`driver_roster.sync` |
+| 人名形态 | `name_len_min`、`name_len_max`、`name_forbidden_tokens`、`name_require_cjk` | `driver_roster.plausible_person_name` |
+| 路径 | `tmp_dir`（月报中间文件）、`state_dir`（台账/发信状态） | `monthly_summary` 里的 `/tmp`、固定 `state/` |
+
+报表「报销明细」的列布局与月份标题继续从已有的 `report_detail_sheet.columns`（`visible` / `hidden_technical` / `widths` / `date_source_priority` / `month_label`）动态解析，列位置按表头名定位，不再假定「金额固定 D 列、唯一键固定 E 列」；月份归属字段优先级从 `adapters.input.window.period_field_priority` 读取。
+
+**流程优化与预期效果**（同一份固定输入、相同环境下重复测量的均值）：
+
+| 优化点 | 做法 | 效果 |
+|---|---|---|
+| 月报两次全表扫描 → 一次 | `compute()` 改为一次连接、一次 `SELECT`，在内存中按目标月/对比月分组后再各自聚合；保留 `compute_month()` 兼容入口 | 月报计算 **约 0.57 ms → 0.27 ms（约 -54%）** |
+| 台账重复 DDL → 结构指纹短路 | `connect()` 用 `PRAGMA user_version` + 列集合校验，结构已就绪时跳过建表/迁移/建索引；新库或缺列时仍完整迁移 | 单次连接 **约 1.58 ms → 1.47 ms（约 -7%）**；台账条目越多、调用越频繁收益越明显 |
+| 司机名册重复扫目录 → 进程内缓存 | `report_drivers()` 按报表目录缓存，`save_config()` 自动失效 | **约 0.037 ms → 0.001 ms（-97%）**，一次归集内多次 `resolve` 不再反复 glob 磁盘 |
+| 写报表统一布局解析 | 列位置/宽度/日期字段优先级一次解析后复用，不再多处硬编码列号 | 改列结构只改配置，无需改代码；减少重复推导 |
+
+**回归保证**：改造前后用 29 个固定场景（文案渲染、报表写入与幂等、台账统计与查重、名册解析、月报计算、任务、通知 dry-run）采集输出快照；忽略动态时间戳与临时目录后，**语义差异为 0**。真实报表未被测试写入（基线脚本只操作临时副本）。
+
 ## 边界
 
 - **只读取唯一的「物流部」群**；只向 `chat_whitelist` 中 `notify=true` 的那个精确 chat_id 发司机版，绝不向停用旧群、门店群或非白名单会话发消息。
@@ -214,7 +242,9 @@ agent_created: true
 
 | 文件 | 用途 |
 |---|---|
-| `config.json` | **version 6**：唯一主群、停用群、弹性司机名册、`reporting.active_drivers_only` / `notification_mode=group_only` / `per_driver_dm.enabled=false`、路径、阈值；`driver_message` = 极简司机文案口径 + 安全驾驶调侃句库 |
+| `config.json` | **version 6**：唯一主群、停用群、弹性司机名册、`reporting.active_drivers_only` / `notification_mode=group_only` / `per_driver_dm.enabled=false`、路径、阈值；`driver_message` = 极简司机文案口径 + 安全驾驶调侃句库；`runtime` = 原散落脚本的硬编码默认值（可不填） |
+| `config.example.json` | 入库的脱敏配置模板，含完整的 `runtime` 节与默认值 |
+| `scripts/runtime_config.py` | 运行时配置单一入口：配置优先、原值兜底；`current_year()` / `state_dir()` 等共享 helper |
 | `scripts/driver_roster.py` | 名册同步（可选，仅提升精度）、逐条司机归属解析（含 `is_new_driver` 弹性归属）、名册列表 |
 | `scripts/driver_copy.py` | **极简群内版统一渲染**：只列有凭证司机 + 金额 + 日期 + 一行小提示 + 安全驾驶调侃（`joke` / `render --kind group`；`personal` 已 deprecated） |
 | `references/ocr-and-dedup.md` | 手写票识别规则、司机归属判定、金额抽取、置信度、四层去重键 |

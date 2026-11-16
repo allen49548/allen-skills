@@ -44,6 +44,9 @@ from datetime import date, datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
 
 
 def load_config():
@@ -63,7 +66,7 @@ def pick_joke(cfg, run_id=None):
     """
     import re
     joke = dm_cfg(cfg).get("safety_joke") or {}
-    lines = joke.get("lines") or ["慢点开，平安到，比什么报销都划算。"]
+    lines = joke.get("lines") or [rc_get(cfg, "joke_fallback", "慢点开，平安到，比什么报销都划算。")]
     seed = str(run_id or date.today().isoformat())
     m = re.search(r"(\d{4})(\d{2})(\d{2})", seed)
     if m:
@@ -76,11 +79,15 @@ def pick_joke(cfg, run_id=None):
     return lines[idx]
 
 
-def fmt_amount(v):
+def fmt_amount(v, cfg=None):
+    tpl = (dm_cfg(cfg).get("amount_format") if cfg else None) or "¥%.2f"
     try:
-        return "¥%.2f" % float(v or 0)
+        return tpl % float(v or 0)
     except (TypeError, ValueError):
-        return "¥0.00"
+        try:
+            return tpl % 0.0
+        except Exception:
+            return "¥0.00"
 
 
 def clean_dates(dates):
@@ -105,7 +112,9 @@ def clean_dates(dates):
     return uniq
 
 
-def fmt_dates(dates, max_show=4):
+def fmt_dates(dates, max_show=None, cfg=None):
+    if max_show is None:
+        max_show = int(rc_get(cfg, "date_max_show", 4)) if cfg else 4
     ds = clean_dates(dates)
     if not ds:
         return ""
@@ -141,12 +150,12 @@ def issue_line(cfg, issues):
     s = "；".join(items)
     if len(s) > max_chars:
         s = s[:max_chars - 1] + "…"
-    return "小提示：" + s
+    return rc_get(cfg, "issue_prefix", "小提示：") + s
 
 
 def _header(d, cfg, title):
     ts = d.get("generated_at") or datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = ["【报销通知｜%s】%s" % (title, ts)]
+    lines = [rc_get(cfg, "header_template", "【报销通知｜%s】%s") % (title, ts)]
     tl = time_line(cfg, d)
     if tl:
         lines.append(tl)
@@ -168,22 +177,22 @@ def render_group(d, cfg=None):
     不再输出「没列到名字的…」零值提示——司机是弹性的，没发图就不必出现在通报里。
     """
     cfg = cfg or load_config()
-    lines = _header(d, cfg, d.get("group_name") or "物流部")
+    lines = _header(d, cfg, d.get("group_name") or rc_get(cfg, "default_group_name", "物流部"))
     label = d.get("scope_label") or "本次报销"
     rows = [r for r in (d.get("rows") or []) if float(r.get("amount") or 0) > 0]
     if rows:
         lines.append("%s：" % label)
         for r in rows:
-            amt = fmt_amount(r.get("amount"))
-            ds = fmt_dates(r.get("dates"))
+            amt = fmt_amount(r.get("amount"), cfg)
+            ds = fmt_dates(r.get("dates"), cfg=cfg)
             lines.append("· %s %s%s" % (r.get("driver"), amt,
                                         "（%s）" % ds if ds else ""))
         lines.append("合计 %s" % fmt_amount(sum(float(r.get("amount") or 0)
-                                              for r in rows)))
+                                              for r in rows), cfg))
     else:
         lines.append(d.get("no_change_wording")
                      or dm_cfg(cfg).get("no_change_wording")
-                     or "本次没有新的报销，之前记过的都算数。")
+                     or rc_get(cfg, "no_change_wording", "本次没有新的报销，之前记过的都算数。"))
     # 2026-11-14 23:53 用户新口径：跑完任务要在群内 @报销人并贴出确认任务，
     # 报销人可点开查看（follower），负责人可编辑（assignee）。
     # 有 open_id 用飞书原生 <at> 提醒；缺失时退化为纯文本 @姓名，绝不因此不发任务链接。
@@ -204,13 +213,13 @@ def render_personal(d, driver, cfg=None):
                 if r.get("driver") == driver), None)
     amount = float((row or {}).get("amount") or 0)
     if amount > 0:
-        ds = fmt_dates((row or {}).get("dates"))
-        lines.append("%s %s%s" % (label, fmt_amount(amount),
+        ds = fmt_dates((row or {}).get("dates"), cfg=cfg)
+        lines.append("%s %s%s" % (label, fmt_amount(amount, cfg),
                                   "（%s）" % ds if ds else ""))
     else:
         lines.append(d.get("no_change_wording")
                      or dm_cfg(cfg).get("no_change_wording")
-                     or "本次没有新的报销，之前记过的都算数。")
+                     or rc_get(cfg, "no_change_wording", "本次没有新的报销，之前记过的都算数。"))
     personal = (d.get("personal_issues") or {}).get(driver)
     if isinstance(personal, str):
         personal = [personal]

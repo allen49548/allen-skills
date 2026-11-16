@@ -55,26 +55,100 @@ from xml.sax.saxutils import escape as xml_escape, unescape as xml_unescape
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
-SHEET_NAME = "报销明细"
 NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
 
+# —— 下列「默认布局」与改造前逐字一致；运行时由 config 覆盖（见 _layout）。
 # 4 个可见字段 + 1 个隐藏技术列（幂等键，绝不参与展示）
-HEADERS = ["日期", "订单号", "类型", "金额(元)", "唯一键"]
-WIDTHS = [14, 32, 18, 12, 0]
-HIDDEN_COLS = {4}                 # E 列隐藏
-AMOUNT_COL = 3                    # D 列 = 金额
-KEY_COL = 4                       # E 列 = 隐藏唯一键
-DATE_COL = 0                      # A 列 = 日期
-ORDER_COL = 1                     # B 列 = 订单号
-TYPE_COL = 2                      # C 列 = 类型
+_DEFAULT_HEADERS = ["日期", "订单号", "类型", "金额(元)", "唯一键"]
+_DEFAULT_WIDTHS = [14, 32, 18, 12, 0]
+_DEFAULT_HIDDEN = {4}             # E 列隐藏
+_DEFAULT_AMOUNT_COL = 3           # D 列 = 金额
+_DEFAULT_KEY_COL = 4              # E 列 = 隐藏唯一键
+_DEFAULT_DATE_COL = 0             # A 列 = 日期
+_DEFAULT_ORDER_COL = 1            # B 列 = 订单号
+_DEFAULT_TYPE_COL = 2             # C 列 = 类型
+_DEFAULT_SHEET_NAME = "报销明细"
+_DEFAULT_NO_MONTH = "未标月份"
+_DEFAULT_DATE_PRIORITY = ("receipt_date", "pay_time", "message_time", "created_at")
+# 兼容旧代码/外部 import：默认常量仍存在，值为原硬编码
+SHEET_NAME = _DEFAULT_SHEET_NAME
+HEADERS = _DEFAULT_HEADERS
+WIDTHS = _DEFAULT_WIDTHS
+HIDDEN_COLS = _DEFAULT_HIDDEN
+AMOUNT_COL = _DEFAULT_AMOUNT_COL
+KEY_COL = _DEFAULT_KEY_COL
+DATE_COL = _DEFAULT_DATE_COL
+ORDER_COL = _DEFAULT_ORDER_COL
+TYPE_COL = _DEFAULT_TYPE_COL
 SKIP_KEYS = {"", "唯一键", "合计"}
-NO_MONTH = "未标月份"
+NO_MONTH = _DEFAULT_NO_MONTH
 
 
 def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _layout(cfg):
+    """按 config.report_detail_sheet 计算布局；缺项回退默认值，保证输出不变。"""
+    rds = cfg.get("report_detail_sheet") or {}
+    cols = rds.get("columns") or {}
+    visible = list(cols.get("visible") or _DEFAULT_HEADERS[:4])
+    hidden = list(cols.get("hidden_technical") or _DEFAULT_HEADERS[4:])
+    headers = visible + hidden
+    # 宽度：与列一一对应；配置可给 widths，否则按默认列位置回填
+    widths = list(cols.get("widths") or _DEFAULT_WIDTHS[:len(headers)])
+    if len(widths) < len(headers):
+        widths += _DEFAULT_WIDTHS[len(widths):len(headers)]
+    hidden_idx = set(range(len(visible), len(headers)))
+    # 列位置按表头名解析，找不到则回退默认位置
+    def idx(name, fallback):
+        return headers.index(name) if name in headers else fallback
+    return {
+        "sheet_name": rds.get("sheet_name") or rc_get(cfg, "sheet_name", _DEFAULT_SHEET_NAME),
+        "headers": headers,
+        "widths": widths,
+        "hidden_cols": hidden_idx,
+        "amount_col": idx("金额(元)", _DEFAULT_AMOUNT_COL),
+        "key_col": idx("唯一键", _DEFAULT_KEY_COL),
+        "date_col": idx("日期", _DEFAULT_DATE_COL),
+        "order_col": idx("订单号", _DEFAULT_ORDER_COL),
+        "type_col": idx("类型", _DEFAULT_TYPE_COL),
+        "date_priority": tuple(cols.get("date_source_priority") or _DEFAULT_DATE_PRIORITY),
+        # 未标月份哨兵取 runtime 可配置项（默认「未标月份」，与原硬编码一致）。
+        # 注意：report_detail_sheet.columns.undated_group 是带括号的注释文案，不能当数据键。
+        "undated_group": rc_get(cfg, "undated_group", _DEFAULT_NO_MONTH),
+        "month_label": cols.get("month_label") or "YYYY年M月（共 N 笔 ¥X）",
+        "skip_keys": {"", (headers[-1] if headers else "唯一键"), "合计"},
+    }
+
+
+_DATE_PRIORITY = _DEFAULT_DATE_PRIORITY
+
+
+def apply_layout_config(cfg):
+    """用 config 值刷新模块级布局常量；内部函数无需逐个传参。
+    在任何命令入口调用一次；缺省值与改造前完全相同。
+    """
+    global SHEET_NAME, HEADERS, WIDTHS, HIDDEN_COLS, AMOUNT_COL, KEY_COL
+    global DATE_COL, ORDER_COL, TYPE_COL, SKIP_KEYS, NO_MONTH, _DATE_PRIORITY
+    lay = _layout(cfg)
+    SHEET_NAME = lay["sheet_name"]
+    HEADERS = lay["headers"]
+    WIDTHS = lay["widths"]
+    HIDDEN_COLS = lay["hidden_cols"]
+    AMOUNT_COL = lay["amount_col"]
+    KEY_COL = lay["key_col"]
+    DATE_COL = lay["date_col"]
+    ORDER_COL = lay["order_col"]
+    TYPE_COL = lay["type_col"]
+    SKIP_KEYS = lay["skip_keys"]
+    NO_MONTH = lay["undated_group"]
+    _DATE_PRIORITY = lay["date_priority"]
 
 
 def col_letter(i):
@@ -112,9 +186,9 @@ def row_xml(r, values, amount_col=AMOUNT_COL):
     return '<row r="%d">%s</row>' % (r, "".join(cells))
 
 
-def receipt_date(e):
-    """日期：消费日期 → 支付时间 → 消息时间 → 台账创建时间。"""
-    for k in ("receipt_date", "pay_time", "message_time", "created_at"):
+def receipt_date(e, priority=None):
+    """日期：消费日期 → 支付时间 → 消息时间 → 台账创建时间（优先级可配置）。"""
+    for k in (priority or _DATE_PRIORITY):
         v = str(e.get(k) or "").strip()
         if v:
             return v[:10]
@@ -132,41 +206,51 @@ def entry_values(e):
     ]
 
 
-def month_key(date_str):
+def month_key(date_str, no_month=None):
     m = re.match(r"(\d{4})-(\d{2})", str(date_str or ""))
-    return "%s-%s" % (m.group(1), m.group(2)) if m else NO_MONTH
+    return "%s-%s" % (m.group(1), m.group(2)) if m else (no_month or NO_MONTH)
 
 
-def month_label(key, count, amount):
-    if key == NO_MONTH:
-        return "%s（共 %d 笔 ¥%.2f）" % (NO_MONTH, count, amount)
+def month_label(key, count, amount, lay=None):
+    no_month = (lay or {}).get("undated_group", NO_MONTH)
+    if key == no_month:
+        return "%s（共 %d 笔 ¥%.2f）" % (no_month, count, amount)
     y, m = key.split("-")
-    return "%s年%d月（共 %d 笔 ¥%.2f）" % (y, int(m), count, amount)
+    tpl = (lay or {}).get("month_label", "YYYY年M月（共 N 笔 ¥X）")
+    return (tpl.replace("YYYY", y).replace("M", str(int(m)))
+               .replace("N", str(count)).replace("X", "%.2f" % amount))
 
 
-def build_display_rows(records):
+def build_display_rows(records, lay=None):
     """把结构化明细按月份分节展开为 sheet 行（不含表头/合计由调用方加）。"""
+    lay = lay or {}
+    no_month = lay.get("undated_group", NO_MONTH)
     groups = {}
     for rec in records:
-        groups.setdefault(month_key(rec["date"]), []).append(rec)
+        groups.setdefault(month_key(rec["date"], no_month), []).append(rec)
     # 未标月份永远排最后；组内按日期升序，同日保持原有顺序（稳定排序，保证幂等）
-    ordered = sorted(groups, key=lambda k: (k == NO_MONTH, k))
+    ordered = sorted(groups, key=lambda k: (k == no_month, k))
     out = []
+    ncol = len(lay.get("headers", HEADERS))
     for k in ordered:
         items = sorted(groups[k], key=lambda x: (x["date"] == "", x["date"]))
         sub = round(sum(float(x["amount"] or 0) for x in items), 2)
-        out.append([month_label(k, len(items), sub), "", "", "", ""])
+        out.append([month_label(k, len(items), sub, lay)] + [""] * (ncol - 1))
         for rec in items:
             out.append([rec["date"], rec["order_no"], rec["category"],
                         rec["amount"], rec["key"]])
     return out
 
 
-def sheet_xml(rows):
+def sheet_xml(rows, lay=None):
     """rows: list of (row_number, values)。E 列隐藏，只展示 4 个核心字段。"""
+    lay = lay or {}
+    headers = lay.get("headers", HEADERS)
+    widths = lay.get("widths", WIDTHS)
+    hidden_cols = lay.get("hidden_cols", HIDDEN_COLS)
     col_defs = []
-    for i, w in enumerate(WIDTHS):
-        if i in HIDDEN_COLS:
+    for i, w in enumerate(widths):
+        if i in hidden_cols:
             col_defs.append('<col min="%d" max="%d" width="0" hidden="1" customWidth="1"/>'
                             % (i + 1, i + 1))
         else:
@@ -183,11 +267,19 @@ def sheet_xml(rows):
             '<sheetFormatPr defaultRowHeight="15"/>'
             '<cols>%s</cols><sheetData>%s</sheetData>'
             '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
-            '</worksheet>') % (NS_MAIN, col_letter(len(HEADERS) - 1), max(1, len(rows)), cols, body)
+            '</worksheet>') % (NS_MAIN, col_letter(len(headers) - 1), max(1, len(rows)), cols, body)
 
 
-def total_row(amount):
-    return ["合计", "", "", round(float(amount), 2), ""]
+def total_row(amount, lay=None):
+    lay = lay or {}
+    key_col = lay.get("key_col", KEY_COL)
+    amount_col = lay.get("amount_col", AMOUNT_COL)
+    out = [""] * len(lay.get("headers", HEADERS))
+    out[0] = "合计"
+    out[amount_col] = round(float(amount), 2)
+    if key_col < len(out):
+        out[key_col] = ""
+    return out
 
 
 def read_parts(path):
@@ -416,8 +508,13 @@ def verify(path, before_parts, changed_names, expect_rows, expect_amount):
     return result
 
 
-def apply_one(path, entries, backup_dir):
+def apply_one(path, entries, backup_dir, lay=None):
     """在单个 xlsx 内建/写/迁移「报销明细」。返回 (result_dict, error_or_None)。"""
+    lay = lay or {}
+    sheet_name = lay.get("sheet_name", SHEET_NAME)
+    key_col = lay.get("key_col", KEY_COL)
+    amount_col = lay.get("amount_col", AMOUNT_COL)
+    date_priority = lay.get("date_priority", _DEFAULT_DATE_PRIORITY)
     parts = read_parts(path)
     shared = read_shared_strings(parts)
     detail_part, _ = find_detail_sheet(parts)
@@ -493,10 +590,12 @@ def apply_one(path, entries, backup_dir):
 
 def cmd_apply(args):
     cfg = load_config()
+    apply_layout_config(cfg)
     with open(args.data, "r", encoding="utf-8") as f:
         d = json.load(f)
     run_id = d["run_id"]
-    year = int(d.get("year") or 2026)
+    from runtime_config import current_year as rc_year
+    year = int(d.get("year") or rc_year(cfg))
     root = os.path.join(cfg["report_root"], "%d年" % year, "司机工资")
     backup_dir = d.get("backup_dir") or os.path.join(cfg["state_dir"], "backups", run_id)
     if not os.path.isabs(backup_dir):
@@ -528,6 +627,7 @@ def cmd_apply(args):
 
 
 def cmd_inspect(args):
+    apply_layout_config(load_config())
     parts = read_parts(args.file)
     detail_part, rid = find_detail_sheet(parts)
     out = {"file": args.file, "sheet_exists": bool(detail_part),

@@ -47,6 +47,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.abspath(os.path.join(HERE, "..", "config.json"))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get, current_year as rc_year  # 配置优先、原值兜底
+
+# 同进程内 report_drivers 结果缓存（key=目录），避免 resolve 里重复 glob 磁盘
+_REPORT_DRIVERS_CACHE = {}
 
 
 def load_config():
@@ -58,6 +64,7 @@ def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    _REPORT_DRIVERS_CACHE.clear()
 
 
 def report_dir(cfg, year):
@@ -67,8 +74,10 @@ def report_dir(cfg, year):
 
 
 def report_drivers(cfg, year):
-    """从报表文件名提取司机名；{司机}{年份}.xlsx。"""
+    """从报表文件名提取司机名；{司机}{年份}.xlsx。同目录同一进程内缓存结果。"""
     d = report_dir(cfg, year)
+    if d in _REPORT_DRIVERS_CACHE:
+        return _REPORT_DRIVERS_CACHE[d]
     names = []
     for path in glob.glob(os.path.join(d, "*.xlsx")):
         base = os.path.basename(path)
@@ -77,7 +86,9 @@ def report_drivers(cfg, year):
         m = re.match(r"^(.+?)(\d{4})\.xlsx$", base)
         if m:
             names.append(m.group(1))
-    return sorted(set(names))
+    result = sorted(set(names))
+    _REPORT_DRIVERS_CACHE[d] = result
+    return result
 
 
 def all_drivers(cfg, year):
@@ -151,7 +162,9 @@ def sync(cfg, chat_id, year, dry_run):
     chat_id = chat_id or primary_chat_id(cfg)
     if not chat_id:
         return {"ok": False, "reason": "找不到主群 chat_id"}
-    cmd = ["lark-cli", "im", "+chat-members-list", "--as", "user",
+    ident = ((cfg.get("adapters", {}).get("input", {}).get("client", {}) or {}).get("identity")
+             or "user")
+    cmd = ["lark-cli", "im", "+chat-members-list", "--as", ident,
            "--chat-id", chat_id, "--page-all"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -223,7 +236,7 @@ def names_in_text(text, drivers):
     return [d for d in drivers if d in text]
 
 
-def plausible_person_name(name):
+def plausible_person_name(name, cfg_override=None):
     """判断飞书返回的 sender_name 是否像一个真实人名（排除机器人/账号/群名）。
 
     弹性司机口径下，名册外姓名可以直接成为 driver；这里只做最低限度的形态校验，
@@ -232,11 +245,18 @@ def plausible_person_name(name):
     if not name:
         return False
     s = str(name).strip()
-    if not (2 <= len(s) <= 12):
+    cfg = cfg_override or {}
+    lo = int(rc_get(cfg, "name_len_min", 2))
+    hi = int(rc_get(cfg, "name_len_max", 12))
+    if not (lo <= len(s) <= hi):
         return False
-    if any(x in s for x in ("@", "/", "\\", ":", " ", "群", "机器人", "CLI", "Bot", "bot")):
+    forbidden = rc_get(cfg, "name_forbidden_tokens",
+                       ["@", "/", "\\", ":", " ", "群", "机器人", "CLI", "Bot", "bot"])
+    if any(x in s for x in forbidden):
         return False
-    return bool(re.search(r"[\u4e00-\u9fa5]", s))
+    if rc_get(cfg, "name_require_cjk", True):
+        return bool(re.search(r"[\u4e00-\u9fa5]", s))
+    return True
 
 
 def resolve(cfg, sender_id, sender_name, text, receipt_name, year):
@@ -252,7 +272,7 @@ def resolve(cfg, sender_id, sender_name, text, receipt_name, year):
     known_driver_name = sender_name if sender_name in drivers else None
     # 弹性司机：名册外的真实群成员，发图时按发送者姓名直接建立 driver（不是猜）
     new_driver_name = None
-    if accept_new and not is_owner and not known_driver_name and plausible_person_name(sender_name):
+    if accept_new and not is_owner and not known_driver_name and plausible_person_name(sender_name, cfg):
         new_driver_name = str(sender_name).strip()
     driver_by_sender_name = known_driver_name or new_driver_name
     text_names = names_in_text(text, drivers)
@@ -385,7 +405,7 @@ def main():
 
     args = ap.parse_args()
     cfg = load_config()
-    year = args.year or 2026
+    year = args.year or rc_year(cfg)
 
     if args.cmd == "list":
         out = listing(cfg, year)

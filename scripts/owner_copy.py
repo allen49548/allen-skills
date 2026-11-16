@@ -34,20 +34,38 @@ data.json 字段（全部可选，缺什么不写什么）：
 import argparse
 import json
 import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
+
+# render(d, cfg) / main() 设置；纯函数直接调用时回退原硬编码值
+_CFG = {}
 
 
 def money(v):
+    tpl = ((_CFG.get("driver_message") or {}).get("amount_format")
+           or "¥%.2f")
     try:
-        return "¥%.2f" % float(v or 0)
+        return tpl % float(v or 0)
     except (TypeError, ValueError):
-        return "¥0.00"
+        try:
+            return tpl % 0.0
+        except Exception:
+            return "¥0.00"
 
 
-def render(d):
+def render(d, cfg=None):
+    global _CFG
+    _CFG = cfg or {}
     L = []
     a = L.append
     a("【报销归集·负责人】%s（run %s）" % (d.get("now") or "", d.get("run_id") or ""))
-    a("窗口 %s（14 天）｜确认截止 %s" % (d.get("window") or "-", d.get("due") or "-"))
+    window_days = rc_get(_CFG, "run_log_window_days", 14)
+    a("窗口 %s（%s 天）｜确认截止 %s" % (d.get("window") or "-", window_days,
+                                     d.get("due") or "-"))
     a("")
 
     news = d.get("new_entries") or []
@@ -142,7 +160,13 @@ def main():
     args = ap.parse_args()
     with open(args.data, "r", encoding="utf-8") as f:
         d = json.load(f)
-    text = render(d)
+    cfg_path = os.path.abspath(os.path.join(HERE, "..", "config.json"))
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    text = render(d, cfg)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(text + "\n")

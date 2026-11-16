@@ -40,7 +40,20 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
 STATE_DIR = os.path.join(HERE, "..", "state")
-SENT_FILE = os.path.join(STATE_DIR, "monthly_sent.json")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get, state_dir as rc_state_dir  # 配置优先、原值兜底
+
+# main() 读取配置后设置；纯函数/直接调用时回退原值，保证输出不变
+_CFG = {}
+
+
+def _sent_file():
+    return os.path.join(rc_state_dir(_CFG or None), "monthly_sent.json")
+
+
+def _state_dir():
+    return rc_state_dir(_CFG or None)
 
 try:
     from driver_roster import report_drivers as roster_report_drivers
@@ -84,28 +97,45 @@ def target_month(ref=None, override=None):
     return last.strftime("%Y-%m"), "%d年%d月" % (last.year, last.month)
 
 
-def entry_month(e):
-    for f in ("pay_time", "receipt_date", "created_at"):
+def entry_month(e, cfg=None):
+    c = cfg if cfg is not None else _CFG
+    priority = (((c.get("adapters", {}).get("input", {}).get("window", {}) or {})
+                 .get("period_field_priority"))
+                or ("pay_time", "receipt_date", "created_at"))
+    for f in priority:
         v = e.get(f)
         if v:
             return str(v)[:7]
     return None
 
 
-def compute_month(cfg, ym):
-    """返回 {driver: {count,total,reimbursed,pending}}，按 pay_time 所属月。"""
+def _month_rows(cfg, months):
+    """一次连接、一次全表扫描，返回 {ym: [row_dict,...]}。
+    替代原先每个月各开一次连接、各扫一次全表（compute 原本调用两次）。
+    """
     conn = connect(cfg)
-    rows = conn.execute(
-        "SELECT driver, amount, pay_time, receipt_date, created_at, reimbursed, voided "
-        "FROM entries WHERE voided=0"
-    ).fetchall()
-    conn.close()
-    by_driver = {}
+    try:
+        rows = conn.execute(
+            "SELECT driver, amount, pay_time, receipt_date, created_at, reimbursed, voided "
+            "FROM entries WHERE voided=0"
+        ).fetchall()
+    finally:
+        conn.close()
+    out = {m: [] for m in months}
     for r in rows:
         e = dict(r)
-        if entry_month(e) != ym:
-            continue
-        d = e["driver"] or "未识别司机"
+        m = entry_month(e, cfg)
+        if m in out:
+            out[m].append(e)
+    return out
+
+
+def _aggregate_month(rows, cfg=None):
+    """把一个月的行聚合为 {driver: rec}，逻辑与原 compute_month 完全一致。"""
+    c = cfg if cfg is not None else _CFG
+    by_driver = {}
+    for e in rows:
+        d = e["driver"] or rc_get(c, "unknown_driver", "未识别司机")
         rec = by_driver.setdefault(d, {
             "count": 0, "total": 0.0, "reimbursed": 0.0, "pending": 0.0,
             "reimbursed_count": 0, "pending_count": 0, "dates": [],
@@ -124,6 +154,11 @@ def compute_month(cfg, ym):
             rec["pending"] += float(e["amount"] or 0)
             rec["pending_count"] += 1
     return by_driver
+
+
+def compute_month(cfg, ym):
+    """兼容入口：单月聚合（历史调用方保留）。compute() 内部已改为一次扫描。"""
+    return _aggregate_month(_month_rows(cfg, [ym])[ym], cfg)
 
 
 def prev_month_ym(ym):
@@ -164,9 +199,12 @@ def agg(by):
 
 
 def compute(cfg, ym):
-    by_driver = compute_month(cfg, ym)
+    # 一次连接、一次全表扫描取回目标月与对比月的行，再在内存里分别聚合。
+    # 原实现调用 compute_month 两次 → 两次连接 + 两次全表扫描。
     prev_ym = prev_month_ym(ym)
-    prev_by_driver = compute_month(cfg, prev_ym)
+    rows_by_month = _month_rows(cfg, [ym, prev_ym])
+    by_driver = _aggregate_month(rows_by_month[ym], cfg)
+    prev_by_driver = _aggregate_month(rows_by_month[prev_ym], cfg)
 
     # 只列当月实际有凭证（发了图片并已入账）的司机：司机是弹性的，不铺全员名册、
     # 不列 0 笔司机、不纠结谁没到齐。对比月数据仍单独取，仅供负责人专业版环比使用。
@@ -241,11 +279,12 @@ def build_driver_data(cfg, drivers, label, generated_at, due, run_id, chat):
         "window": label,
         "due": due,
         "scope_label": "上月报销",
-        "group_name": chat.get("name") or "物流部",
+        "group_name": chat.get("name") or rc_get(_CFG, "default_group_name", "物流部"),
         "rows": [{"driver": d["driver"], "amount": d["total"],
                   "dates": d.get("dates") or []} for d in drivers],
         "issues": [],
-        "no_change_wording": "上月没有报销，之前记过的都算数。",
+        "no_change_wording": rc_get(_CFG, "monthly_no_change_wording",
+                                    "上月没有报销，之前记过的都算数。"),
     }
 
 
@@ -277,7 +316,8 @@ def render_owner(drivers, grand, label, prev_label, generated_at,
         "合计：%d 笔，¥%.2f（已报销 ¥%.2f / 待报销 ¥%.2f）｜%s\n\n"
         "台账：%s\n"
         "清单：%s"
-    ) % (generated_at, label, prev_label, chat["name"] or "物流部", chat["chat_id"],
+    ) % (generated_at, label, prev_label,
+         chat["name"] or rc_get(_CFG, "default_group_name", "物流部"), chat["chat_id"],
          "\n".join(lines),
          grand["count"], grand["total"], grand["reimbursed"], grand["pending"], ring_g,
          ledger_path, run_log)
@@ -287,10 +327,11 @@ def render_owner(drivers, grand, label, prev_label, generated_at,
 
 
 def load_sent():
-    if not os.path.isfile(SENT_FILE):
+    sf = _sent_file()
+    if not os.path.isfile(sf):
         return {}
     try:
-        return json.load(open(SENT_FILE, encoding="utf-8"))
+        return json.load(open(sf, encoding="utf-8"))
     except Exception:
         return {}
 
@@ -303,8 +344,9 @@ def mark_sent(ym):
     d = load_sent()
     d["last_month"] = ym
     d["sent_at"] = datetime.now().isoformat(timespec="seconds")
-    os.makedirs(os.path.dirname(SENT_FILE), exist_ok=True)
-    json.dump(d, open(SENT_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    sf = _sent_file()
+    os.makedirs(os.path.dirname(sf), exist_ok=True)
+    json.dump(d, open(sf, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 
 def call_notify(args_list):
@@ -333,6 +375,8 @@ def main():
         ap.error("需指定 --compute 或 --send")
 
     cfg = load_config()
+    global _CFG
+    _CFG = cfg
     ym, label = target_month(override=args.month)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -359,7 +403,7 @@ def main():
     # ---- --send ----
     run_id = args.run_id or ("monthly-%s-%s" % (ym, datetime.now().strftime("%m%d%H%M")))
     ledger_path = db_path(cfg)
-    run_log = os.path.normpath(os.path.join(STATE_DIR, "runs", "monthly_%s_%s.md"
+    run_log = os.path.normpath(os.path.join(_state_dir(), "runs", "monthly_%s_%s.md"
                                             % (ym, datetime.now().strftime("%m%d%H%M"))))
 
     if not args.dry_run and already_sent(ym):
@@ -375,8 +419,9 @@ def main():
     group_text = render_group(driver_data, cfg)
     owner_text = render_owner(drivers, grand, label, prev_label, generated_at,
                               ledger_path, run_log, chat)
-    group_file = "/tmp/monthly_group_%s.txt" % ym
-    owner_file = "/tmp/monthly_owner_%s.txt" % ym
+    tmp_dir = rc_get(_CFG, "tmp_dir", "/tmp")
+    group_file = os.path.join(tmp_dir, "monthly_group_%s.txt" % ym)
+    owner_file = os.path.join(tmp_dir, "monthly_owner_%s.txt" % ym)
     with open(group_file, "w", encoding="utf-8") as f:
         f.write(group_text)
     with open(owner_file, "w", encoding="utf-8") as f:
@@ -407,7 +452,7 @@ def main():
         }
 
     # 写清单（dry-run 也写，便于核对渲染结果）
-    os.makedirs(os.path.join(STATE_DIR, "runs"), exist_ok=True)
+    os.makedirs(os.path.join(_state_dir(), "runs"), exist_ok=True)
     with open(run_log, "w", encoding="utf-8") as f:
         f.write("# 月初月报（按司机分类）%s\n\n" % label)
         f.write("运行时间：%s\n" % generated_at)

@@ -33,6 +33,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "..", "config.json")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from runtime_config import get as rc_get  # 配置优先、原值兜底
 
 
 def load_config(path):
@@ -40,8 +43,14 @@ def load_config(path):
         return json.load(f)
 
 
+# 由 main() 在读取配置后设置；缺省 {} 时全部回退原硬编码值，保证纯函数直接调用行为不变
+_CFG = {}
+
+
 def call_send(chat_id, text, identity, run_id, dry_run=False):
-    key = "reimb-%s-%s" % (run_id, chat_id[:8])
+    prefix = rc_get(_CFG, "idempotency_prefix", "reimb")
+    klen = int(rc_get(_CFG, "chat_id_key_len", 8))
+    key = "%s-%s-%s" % (prefix, run_id, chat_id[:klen])
     argv = ["lark-cli", "im", "+messages-send",
             "--as", identity,
             "--chat-id", chat_id,
@@ -56,7 +65,7 @@ def call_send_user(open_id, text, identity, key, dry_run=False):
             "--as", identity,
             "--user-id", open_id,
             "--text", "-",
-            "--idempotency-key", key[:50],
+            "--idempotency-key", key[:int(rc_get(_CFG, "idempotency_max_len", 50))],
             "--format", "json"]
     return _run_send(argv, text, dry_run)
 
@@ -83,7 +92,7 @@ def _run_send(argv, text, dry_run):
 def send_with_fallback(chat_id, text, run_id, dry_run):
     """bot -> user 顺序降级，每级只试一次。返回 (result, errors)。"""
     errors = []
-    for identity in ("bot", "user"):
+    for identity in rc_get(_CFG, "lark_identity_fallback", ["bot", "user"]):
         res = call_send(chat_id, text, identity, run_id, dry_run)
         if res.get("dry_run"):
             return {"ok": False, "dry_run": True, "argv": res["argv"]}, errors
@@ -168,14 +177,16 @@ def send_driver_dms(cfg, manifest_path, run_id, dry_run):
         if not open_id:
             out["skipped"].append({"driver": driver, "reason": "缺 open_id：跳过私聊并记原因（司机进群后 sync 自动补）"})
             continue
-        if not open_id.startswith("ou_"):
-            out["failed"].append({"driver": driver, "reason": "open_id 格式非 ou_ 开头，拒绝发送（疑似填成 chat_id）"})
+        prefix = rc_get(_CFG, "open_id_prefix", "ou_")
+        if not open_id.startswith(prefix):
+            out["failed"].append({"driver": driver, "reason": "open_id 格式非 %s 开头，拒绝发送（疑似填成 chat_id）" % prefix})
             continue
 
-        key = "reimb-dm:%s:%s" % (run_id, driver)
+        key = "%s-dm:%s:%s" % (rc_get(_CFG, "idempotency_prefix", "reimb"), run_id, driver)
         errs = []
         done = False
-        for identity in (pcfg.get("identity_order") or ["bot", "user"]):
+        for identity in (pcfg.get("identity_order")
+                         or rc_get(_CFG, "lark_identity_fallback", ["bot", "user"])):
             res = call_send_user(open_id, text, identity, key, dry_run)
             if res.get("dry_run"):
                 out["sent"].append({"driver": driver, "dry_run": True,
@@ -214,6 +225,8 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    global _CFG
+    _CFG = cfg
 
     group_text = args.text
     if args.text_file:
