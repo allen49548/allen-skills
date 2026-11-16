@@ -3,6 +3,7 @@
 
 用法：
   ledger.py check --message-id om_xxx [--image /path/to.png] [--business-key "driver|date|amount|category"] [--phash HEX]
+  ledger.py check-batch --json '[{...}, {...}]'   # 一次进程批量去重 N 条，省 N 次进程启动
   ledger.py add  --json '{"message_id":...}'     # 也可从 stdin 读 JSON
   ledger.py list --limit 20
   ledger.py stats                                # 含已报销/未报销汇总
@@ -172,20 +173,26 @@ def _dup(layer, reason, r):
     }
 
 
-def cmd_check(args, cfg, conn):
+def _check_record(conn, cfg, message_id=None, image=None, phash=None,
+                  business_key=None, order_no=None, amount=None):
+    """单条凭证四层去重核心（cmd_check 与 check-batch 共用）。
+
+    返回同 cmd_check：命中返回 {duplicate, layer, entry, ...}；未命中返回
+    {duplicate:False, image_sha256, phash}。逻辑与改造前逐字一致。
+    """
     cur = conn.cursor()
-    if args.message_id:
-        r = cur.execute("SELECT * FROM entries WHERE message_id=?", (args.message_id,)).fetchone()
+    if message_id:
+        r = cur.execute("SELECT * FROM entries WHERE message_id=?", (message_id,)).fetchone()
         if r:
             return _dup("L1", "同一条消息已处理（含已作废）", r)
 
     sha = None
     ph = None
-    if args.image and os.path.isfile(args.image):
-        sha = file_sha256(args.image)
-        ph = dhash_hex(args.image)
-    elif args.phash:
-        ph = args.phash
+    if image and os.path.isfile(image):
+        sha = file_sha256(image)
+        ph = dhash_hex(image)
+    elif phash:
+        ph = phash
 
     if sha:
         r = cur.execute("SELECT * FROM entries WHERE image_sha256=? LIMIT 1", (sha,)).fetchone()
@@ -196,8 +203,11 @@ def cmd_check(args, cfg, conn):
         threshold = cfg.get("dedup", {}).get("phash_hamming_threshold", 6)
         lookback = int(rc_get(cfg, "phash_lookback_days", 90))
         since = (datetime.now() - timedelta(days=lookback)).isoformat()
+        # 只拉必要列：phash 比对 + L3 订单号/金额交叉校验 + 原登记信息，
+        # 避免 SELECT * 把 28 列全拖进内存逐条扫描。
         rows = cur.execute(
-            "SELECT * FROM entries WHERE phash IS NOT NULL AND created_at>=?", (since,)
+            "SELECT phash, order_no, amount, message_id, created_at, reimbursed, receipt_date "
+            "FROM entries WHERE phash IS NOT NULL AND created_at>=?", (since,)
         ).fetchall()
         best = None
         for r in rows:
@@ -208,25 +218,59 @@ def cmd_check(args, cfg, conn):
             matched = best[1]
             # 同版式截图（如微信账单）导致 dHash 相近并非真重复：
             # 订单号不同 → 不同交易；金额不同 → 不同交易。二者皆非重复。
-            if args.order_no and matched["order_no"] and matched["order_no"] != args.order_no:
+            if order_no and matched["order_no"] and matched["order_no"] != order_no:
                 pass
-            elif args.amount is not None and matched["amount"] is not None \
-                    and abs(float(matched["amount"]) - float(args.amount)) > 0.001:
+            elif amount is not None and matched["amount"] is not None \
+                    and abs(float(matched["amount"]) - float(amount)) > 0.001:
                 pass
             else:
                 return _dup("L3", "感知哈希相似（疑似同一张票的不同截图），距离=%d" % best[0], matched)
 
-    if args.order_no:
-        r = cur.execute("SELECT * FROM entries WHERE order_no=?", (args.order_no,)).fetchone()
+    if order_no:
+        r = cur.execute("SELECT * FROM entries WHERE order_no=?", (order_no,)).fetchone()
         if r:
             return _dup("L4", "同一订单号已入账", r)
 
-    if args.business_key:
-        r = cur.execute("SELECT * FROM entries WHERE business_key=? LIMIT 1", (args.business_key,)).fetchone()
+    if business_key:
+        r = cur.execute("SELECT * FROM entries WHERE business_key=? LIMIT 1", (business_key,)).fetchone()
         if r:
             return _dup("L4", "同一司机+日期+金额+类别已入账", r)
 
     return {"duplicate": False, "image_sha256": sha, "phash": ph}
+
+
+def cmd_check(args, cfg, conn):
+    return _check_record(conn, cfg, args.message_id, args.image, args.phash,
+                         args.business_key, args.order_no, args.amount)
+
+
+def cmd_check_batch(args, cfg, conn):
+    """一次进程批量去重 N 条凭证，省掉 N 次进程启动 + N 次 config 解析 + N 次 SQL 连接。
+
+    输入 JSON（--json 或 stdin）：列表或 {"items":[...]}；每条字段与 check 一致：
+    message_id / image / phash / business_key / order_no / amount。
+    输出 {"ok", "count", "results":[...]}，results 每条与单次 check 完全同构。
+    """
+    raw = args.json
+    if raw is None or raw == "-":
+        raw = sys.stdin.read()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": "batch JSON 解析失败：%s" % e}
+    items = data if isinstance(data, list) else data.get("items", [])
+    results = []
+    for it in items:
+        if not isinstance(it, dict):
+            results.append({"duplicate": False, "error": "非对象条目，已跳过"})
+            continue
+        r = _check_record(conn, cfg,
+                          it.get("message_id"), it.get("image"), it.get("phash"),
+                          it.get("business_key"), it.get("order_no"), it.get("amount"))
+        if it.get("message_id"):
+            r["message_id"] = it["message_id"]
+        results.append(r)
+    return {"ok": True, "count": len(results), "results": results}
 
 
 def cmd_add(args, cfg, conn):
@@ -476,6 +520,8 @@ def main():
     c.add_argument("--order-no")
     c.add_argument("--pay-time")
     c.add_argument("--amount", type=float)
+    cb = sub.add_parser("check-batch", help="一次进程批量去重 N 条凭证（省 N 次进程启动/连接/配置解析）")
+    cb.add_argument("--json", help="批量 JSON（列表或 {\"items\":[...]}），省略则从 stdin 读")
     a = sub.add_parser("add")
     a.add_argument("--json")
     l = sub.add_parser("list")
@@ -509,10 +555,11 @@ def main():
     conn = connect(cfg)
     try:
         handlers = {
-            "check": cmd_check, "add": cmd_add, "list": cmd_list, "stats": cmd_stats,
-            "set-task": cmd_set_task, "mark-reimbursed": cmd_mark_reimbursed,
-            "mark-task-status": cmd_mark_task_status, "unreimbursed": cmd_unreimbursed,
-            "balance": cmd_balance, "update": cmd_update, "void": cmd_void,
+            "check": cmd_check, "check-batch": cmd_check_batch, "add": cmd_add,
+            "list": cmd_list, "stats": cmd_stats, "set-task": cmd_set_task,
+            "mark-reimbursed": cmd_mark_reimbursed, "mark-task-status": cmd_mark_task_status,
+            "unreimbursed": cmd_unreimbursed, "balance": cmd_balance,
+            "update": cmd_update, "void": cmd_void,
         }
         out = handlers[args.cmd](args, cfg, conn)
     finally:

@@ -335,6 +335,24 @@ def find_detail_sheet(parts):
     return part, rid.group(1)
 
 
+def has_detail_sheet(path, lay=None):
+    """轻量判断某报表是否已有「报销明细」sheet（只解压 workbook.xml，不读整个 zip、不碰 openpyxl）。
+
+    只匹配**新名**（sheet_name，如「11月报销明细」）；旧名 sheet 不算命中，这样
+    precreate_all 仍会走 apply_one 做旧名迁移（不丢历史数据）。用于：已有新名明细
+    sheet 且本轮无该司机新凭证的报表直接跳过，避免每轮对全部司机报表做一次完整
+    zip 重写 + openpyxl 回读校验。
+    """
+    lay = lay or {}
+    sheet_name = lay.get("sheet_name", SHEET_NAME)
+    try:
+        with zipfile.ZipFile(path) as z:
+            wb = z.read("xl/workbook.xml").decode("utf-8")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return False
+    return bool(re.search(r'<sheet[^>]*name="%s"[^>]*/>' % re.escape(sheet_name), wb))
+
+
 def read_shared_strings(parts):
     """WPS/Excel 保存后会把 inlineStr 转成共享字符串，必须解析才能读出唯一键。"""
     raw = next((d for i, d in parts if i.filename == "xl/sharedStrings.xml"), None)
@@ -792,7 +810,8 @@ def cmd_apply(args):
 
     files = []
     errors = []
-    if d.get("precreate_all", True):
+    precreate_all = d.get("precreate_all", True)
+    if precreate_all:
         import glob
         paths = sorted(glob.glob(os.path.join(root, "*.xlsx")))
     else:
@@ -802,6 +821,10 @@ def cmd_apply(args):
             errors.append({"file": p, "error": "文件不存在，跳过（绝不新建报表文件）"})
             continue
         drv = os.path.basename(p).replace("%d.xlsx" % year, "")
+        # 性能：precreate_all 时，本轮无该司机新凭证且报表已有新名明细 sheet → 跳过。
+        # 幂等、无变化；缺 sheet 仍预建、旧名 sheet 仍走迁移、有凭证仍写入，语义不变。
+        if precreate_all and not by_driver.get(drv) and has_detail_sheet(p):
+            continue
         res, err = apply_one(p, by_driver.get(drv, []), backup_dir)
         files.append(res)
         if err:

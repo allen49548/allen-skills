@@ -29,10 +29,22 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 TUTORIAL_PATH = os.path.expanduser("~/.workbuddy/shared_tools/飞书机器人配置教程.md")
 BOT_NAME = "廖浩成's Feishu CLI"
 BOT_APP_ID = "cli_aa7fca0a72ba9bb4"
+
+# 群成员列表缓存：机器人在不在目标群是相对稳定的状态，不必每轮通知都拉一次
+# 全量群列表（实测约 0.95s）。TTL 内复用上次结果，仅 auth status 仍实时查。
+# 可用环境变量覆盖：LARK_BOT_CHECK_TTL（秒，默认 1800）；设 0 或删除缓存文件即恢复旧行为。
+CHAT_LIST_CACHE_PATH = os.environ.get(
+    "LARK_BOT_CHECK_CACHE",
+    os.path.expanduser("~/.workbuddy/shared_tools/.lark_bot_check_cache.json"))
+try:
+    CHAT_LIST_TTL = int(os.environ.get("LARK_BOT_CHECK_TTL", "1800"))
+except ValueError:
+    CHAT_LIST_TTL = 1800
 
 # 精简版教程（内嵌，保证即使公共教程文件缺失也能给用户完整指引）
 TUTORIAL = """【飞书机器人配置教程（通用）】
@@ -103,6 +115,48 @@ def _bot_ready(lark):
     return False, (err or out or "无法读取 auth status")[:300]
 
 
+def _load_chat_list_cache():
+    try:
+        with open(CHAT_LIST_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_chat_list_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(CHAT_LIST_CACHE_PATH), exist_ok=True)
+        with open(CHAT_LIST_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _bot_chat_list(lark):
+    """机器人可见的群 chat_id 集合，带 TTL 缓存。
+
+    「机器人在不在群」是稳定状态，每轮通知都拉一次全量群列表（约 0.95s）纯属浪费。
+    TTL 内直接复用上次成功结果；auth status 仍由 _bot_ready 实时查（约 0.12s），
+    保证 token 过期能第一时间发现。缓存 miss 或过期才真正调 lark-cli。
+    """
+    if CHAT_LIST_TTL > 0:
+        entry = (_load_chat_list_cache().get("chat_list") or {})
+        if time.time() - float(entry.get("ts") or 0) < CHAT_LIST_TTL \
+                and isinstance(entry.get("present"), list):
+            return set(entry["present"])
+    rc, out, err = _run([lark, "im", "+chat-list", "--as", "bot", "--types", "group", "--page-all"])
+    present = set()
+    try:
+        data = json.loads(out)
+        items = (data.get("data") or {}).get("chats") or (data.get("data") or {}).get("items") or []
+        present = {c.get("chat_id") for c in items if isinstance(c, dict)}
+    except Exception:
+        pass
+    if rc == 0 and present and CHAT_LIST_TTL > 0:
+        _save_chat_list_cache({"chat_list": {"ts": time.time(), "present": sorted(present)}})
+    return present
+
+
 def check(group_ids=None) -> dict:
     """检测机器人配置。
 
@@ -129,15 +183,8 @@ def check(group_ids=None) -> dict:
         issues.append("② 机器人未登录/未授权（%s）——需运行 lark-cli auth login 重新授权" % detail)
 
     if group_ids:
-        rc, out, err = _run([lark, "im", "+chat-list", "--as", "bot", "--types", "group", "--page-all"])
-        present = set()
-        try:
-            data = json.loads(out)
-            items = (data.get("data") or {}).get("chats") or (data.get("data") or {}).get("items") or []
-            present = {c.get("chat_id") for c in items if isinstance(c, dict)}
-        except Exception:
-            pass
-        listed = rc == 0 and bool(present)
+        present = _bot_chat_list(lark)
+        listed = bool(present)
         for cid in group_ids:
             in_group = cid in present if listed else None  # None = 无法确定，不误报
             groups_ok[cid] = in_group
