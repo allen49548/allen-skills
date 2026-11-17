@@ -215,7 +215,7 @@ def _dup(layer, reason, r):
 def _check_record(conn, cfg, message_id=None, image=None, phash=None,
                   business_key=None, order_no=None, amount=None,
                   driver=None, receipt_date=None, category=None,
-                  report_cache=None):
+                  report_cache=None, image_sha256=None):
     """单条凭证去重核心（cmd_check 与 check-batch 共用）：L1-L4 台账 + L5 群历史池 + L6 报表明细。
 
     返回同 cmd_check：命中返回 {duplicate, layer, entry, ...}；未命中返回
@@ -227,10 +227,10 @@ def _check_record(conn, cfg, message_id=None, image=None, phash=None,
         if r:
             return _dup("L1", "同一条消息已处理（含已作废）", r)
 
-    sha = None
+    sha = image_sha256
     ph = None
     if image and os.path.isfile(image):
-        sha = file_sha256(image)
+        sha = sha or file_sha256(image)
         ph = dhash_hex(image)
     elif phash:
         ph = phash
@@ -307,11 +307,15 @@ def _dup_external(layer, reason, row, source):
     e = dict(row)
     entered = bool(e.get("report_written")) or e.get("status") == "entered" \
         or bool(e.get("in_report"))
+    if source == "本批":
+        status_text = "本轮已出现·不重复计算"
+    else:
+        status_text = "已入账" if entered else "群里出现过·未入账"
     return {
         "duplicate": True, "layer": layer, "reason": reason, "entry": e,
         "original_source": source,
         "original_created_at": e.get("created_at") or e.get("msg_time") or e.get("seen_at"),
-        "original_status": "已入账" if entered else "群里出现过·未入账",
+        "original_status": status_text,
         "original_amount": e.get("amount"),
         "original_receipt_date": e.get("receipt_date"),
         "original_message_id": e.get("message_id"),
@@ -462,19 +466,67 @@ def cmd_check_batch(args, cfg, conn):
     items = data if isinstance(data, list) else data.get("items", [])
     results = []
     report_cache = {}   # 每轮只读一次各司机报表明细
+    threshold = (cfg.get("dedup") or {}).get("phash_hamming_threshold", 6)
+    accepted = []       # 本批已通过（非重复）的凭证，供批内去重
     for it in items:
         if not isinstance(it, dict):
             results.append({"duplicate": False, "error": "非对象条目，已跳过"})
             continue
+        sha = it.get("image_sha256")
+        ph = it.get("phash")
+        img = it.get("image")
+        if img and os.path.isfile(img):
+            sha = sha or file_sha256(img)
+            ph = ph or dhash_hex(img)
+        # 批内去重（新增数据之间）：同订单号/同图/同司机日期金额/感知哈希近似
+        layer, prev = _batch_peek(accepted, it.get("driver"), it.get("receipt_date"),
+                                  it.get("amount"), it.get("category"),
+                                  it.get("order_no"), sha, ph, threshold)
+        if prev is not None:
+            r = _dup_external(layer, "本轮新增数据内部重复", prev, "本批")
+            r["message_id"] = it.get("message_id")
+            results.append(r)
+            continue
         r = _check_record(conn, cfg,
-                          it.get("message_id"), it.get("image"), it.get("phash"),
+                          it.get("message_id"), None, ph,
                           it.get("business_key"), it.get("order_no"), it.get("amount"),
                           it.get("driver"), it.get("receipt_date"), it.get("category"),
-                          report_cache)
+                          report_cache, image_sha256=sha)
         if it.get("message_id"):
             r["message_id"] = it["message_id"]
         results.append(r)
+        if not r.get("duplicate"):
+            accepted.append({"message_id": it.get("message_id"), "driver": it.get("driver"),
+                             "receipt_date": it.get("receipt_date"), "amount": it.get("amount"),
+                             "category": it.get("category"), "order_no": it.get("order_no"),
+                             "image_sha256": sha, "phash": ph,
+                             "status": "pending", "report_written": 0})
     return {"ok": True, "count": len(results), "results": results}
+
+
+def _batch_peek(accepted, driver, receipt_date, amount, category, order_no, sha, ph, threshold):
+    """批内去重：与本次运行中已通过的凭证比，命中返回 (layer, prev_item)。"""
+    def same_txn(a):
+        if order_no and a.get("order_no") and a["order_no"] != order_no:
+            return False
+        if amount is not None and a.get("amount") is not None \
+                and abs(float(a["amount"]) - float(amount)) > 0.001:
+            return False
+        return True
+
+    for a in accepted:
+        if order_no and a.get("order_no") == order_no:
+            return ("B-订单号", a)
+        if sha and a.get("image_sha256") == sha:
+            return ("B-同图", a)
+        if ph and a.get("phash") and hamming(ph, a["phash"]) <= threshold and same_txn(a):
+            return ("B-感知哈希", a)
+        if driver and receipt_date and amount is not None \
+                and a.get("driver") == driver and a.get("receipt_date") == receipt_date \
+                and a.get("amount") is not None and same_txn(a):
+            if not category or not a.get("category") or a["category"] == category:
+                return ("B-司机日期金额", a)
+    return (None, None)
 
 
 def _upsert_seen(conn, it, run_id=None, now=None):
