@@ -181,6 +181,13 @@
       "amount"
     ],
     "never_double_count": true,
+  "sources": [
+    "ledger",
+    "group_history",
+    "report_detail"
+  ],
+  "history_hit_policy": "skip_always",
+  "sources_note": "三方去重池（2026-11-17 用户定案）：①ledger=台账 entries；②group_history=群历史池 voucher_seen（群里出现过的每张凭证，含跳过/待确认/未入账）；③report_detail=各司机报表「报销明细」既有行（台账漏记时兜底）。命中任一池一律判重复跳过，不做二次入账；清单须写明命中池、原出现时间、是否已入账。",
     "resubmit_note": "司机今天发了报销、负责人尚未完成报销、第二天又把同样凭证重发一遍——必须识别为重复提交，绝不重复计算。命中重复时通报必须注明『原登记时间 + 该笔当前是否已报销(待报销/已报销)』，让所有人看得懂为什么没加钱。",
     "note": "去重以订单号+支付时间为准：相同金额不是重复。order_no 存在时业务键=driver|pay_time|order_no，否则回退 driver|receipt_date|amount|category|image_sha16。driver 现在由发送者解析，不同司机即便金额与日期相同也不判重复。L3 感知哈希命中但订单号不同则不算重复（同版式截图误报）。"
   },
